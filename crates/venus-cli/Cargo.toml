@@ -1,0 +1,23 @@
+[package]
+name = "venus-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "venus"
+path = "src/main.rs"
+
+[dependencies]
+venus-core = { path = "../venus-core" }
+venus-utils = { path = "../venus-utils" }
+venus-permissions = { path = "../venus-permissions" }
+venus-services = { path = "../venus-services" }
+venus-tools = { path = "../venus-tools" }
+clap.workspace = true
+tokio.workspace = true
+ratatui.workspace = true
+crossterm.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde_json.workspace = true

@@ -1,0 +1,58 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/venus-utils",
+    "crates/venus-core",
+    "crates/venus-permissions",
+    "crates/venus-services",
+    "crates/venus-tools",
+    "crates/venus-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+futures-core = "0.3"
+futures-util = "0.3"
+async-trait = "0.1"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# HTTP
+reqwest = { version = "0.12", features = ["stream", "json"] }
+
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+
+# TUI
+ratatui = "0.29"
+crossterm = "0.28"
+
+# File system
+globset = "0.4"
+walkdir = "2"
+ignore = "0.4"
+
+# Other
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "6"
+regex = "1"
+pin-project-lite = "0.2"
+bytes = "1"
