@@ -47,6 +47,8 @@ pub struct QueryEngine {
     pub hook_runner: Arc<HookRunner>,
     /// Whether the engine is currently in plan mode.
     pub plan_mode: Arc<AtomicBool>,
+    /// Optional cron scheduler for scheduled tasks.
+    pub cron_scheduler: Option<Arc<crate::cron::CronScheduler>>,
 }
 
 impl QueryEngine {
@@ -91,6 +93,7 @@ impl QueryEngine {
             auto_compact_failures: 0,
             hook_runner,
             plan_mode: Arc::new(AtomicBool::new(false)),
+            cron_scheduler: None,
         })
     }
 
@@ -132,6 +135,7 @@ impl QueryEngine {
             auto_compact_failures: 0,
             hook_runner,
             plan_mode: Arc::new(AtomicBool::new(false)),
+            cron_scheduler: None,
         }
     }
 
@@ -333,6 +337,7 @@ impl QueryEngine {
             model: self.model.clone(),
             tools: self.tools.clone(),
             hook_runner: self.hook_runner.clone(),
+            cron_scheduler: self.cron_scheduler.clone(),
         };
 
         info!("executing tool: {} with input: {}", name, &effective_input);

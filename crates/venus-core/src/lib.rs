@@ -1,5 +1,6 @@
 pub mod background;
 pub mod compact;
+pub mod cron;
 pub mod engine;
 pub mod hooks;
 pub mod lsp;

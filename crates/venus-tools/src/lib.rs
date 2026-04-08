@@ -1,6 +1,9 @@
 pub mod agent;
 pub mod ask_user;
 pub mod bash;
+pub mod cron_create;
+pub mod cron_delete;
+pub mod cron_list;
 pub mod file_edit;
 pub mod file_read;
 pub mod file_write;
@@ -50,5 +53,8 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         Box::new(memory_forget::MemoryForgetTool),
         Box::new(task_output::TaskOutputTool),
         Box::new(task_stop::TaskStopTool),
+        Box::new(cron_create::CronCreateTool),
+        Box::new(cron_delete::CronDeleteTool),
+        Box::new(cron_list::CronListTool),
     ]
 }

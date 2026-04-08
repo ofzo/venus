@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use tokio::sync::mpsc;
 use venus_core::engine::QueryEngine;
 use venus_core::hooks::events::HookEvent;
 use venus_core::message::ContentBlock;
@@ -8,11 +9,21 @@ use venus_core::skill::SkillRegistry;
 use venus_utils::session::{self, SessionMeta};
 
 use crate::commands::{self, CommandResult};
-use crate::input::{self, InputEditor};
+use crate::input;
 use crate::markdown::MarkdownRenderer;
 use crate::render;
 
 pub async fn run_repl(engine: &mut QueryEngine, skill_registry: Option<Arc<SkillRegistry>>) -> Result<()> {
+    // Create cron channel and scheduler
+    let (cron_tx, mut cron_rx) = mpsc::unbounded_channel::<String>();
+
+    let scheduler = Arc::new(venus_core::cron::CronScheduler::new(
+        cron_tx,
+        Some(engine.working_dir.clone()),
+    ));
+    scheduler.start();
+    engine.cron_scheduler = Some(scheduler);
+
     // Fire SessionStart hook
     engine
         .hook_runner
@@ -23,43 +34,74 @@ pub async fn run_repl(engine: &mut QueryEngine, skill_registry: Option<Arc<Skill
         })
         .await;
 
+    // Move input reading to a dedicated thread
+    let (input_tx, mut input_rx) = mpsc::unbounded_channel::<Option<String>>();
+
     let history_path = input::default_history_path();
-    let mut editor = InputEditor::new(history_path);
-
-    loop {
-        let line = tokio::task::block_in_place(|| editor.read_line());
-
-        let input = match line {
-            Some(s) if s.is_empty() => continue,
-            Some(s) => s,
-            None => {
-                eprintln!("\nGoodbye!");
-                break;
-            }
-        };
-
-        // Handle slash commands
-        if input.starts_with('/') {
-            match commands::handle_command(&input, engine, skill_registry.as_ref()).await {
-                CommandResult::Exit => break,
-                CommandResult::InjectMessage(msg) => {
-                    match submit_and_render(engine, &msg).await {
-                        Ok(_) => save_current_session(engine).await,
-                        Err(e) => eprintln!("\x1b[31mError: {}\x1b[0m", e),
+    std::thread::spawn(move || {
+        let mut editor = input::InputEditor::new(history_path);
+        loop {
+            match editor.read_line() {
+                Some(line) => {
+                    if input_tx.send(Some(line)).is_err() {
+                        break;
                     }
                 }
-                CommandResult::Continue => {}
+                None => {
+                    // EOF (Ctrl+D) or error
+                    input_tx.send(None).ok();
+                    break;
+                }
             }
-            continue;
         }
+    });
 
-        // Submit to engine
-        match submit_and_render(engine, &input).await {
-            Ok(_) => {
-                save_current_session(engine).await;
+    // Main event loop
+    loop {
+        tokio::select! {
+            maybe_input = input_rx.recv() => {
+                match maybe_input {
+                    Some(Some(line)) => {
+                        if line.is_empty() {
+                            continue;
+                        }
+
+                        if line.starts_with('/') {
+                            match commands::handle_command(&line, engine, skill_registry.as_ref()).await {
+                                CommandResult::Exit => break,
+                                CommandResult::InjectMessage(msg) => {
+                                    match submit_and_render(engine, &msg).await {
+                                        Ok(_) => save_current_session(engine).await,
+                                        Err(e) => eprintln!("\x1b[31mError: {}\x1b[0m", e),
+                                    }
+                                }
+                                CommandResult::Continue => {}
+                            }
+                            continue;
+                        }
+
+                        match submit_and_render(engine, &line).await {
+                            Ok(_) => {
+                                save_current_session(engine).await;
+                            }
+                            Err(e) => {
+                                eprintln!("\x1b[31mError: {}\x1b[0m", e);
+                            }
+                        }
+                    }
+                    Some(None) | None => {
+                        // EOF or channel closed
+                        eprintln!("\nGoodbye!");
+                        break;
+                    }
+                }
             }
-            Err(e) => {
-                eprintln!("\x1b[31mError: {}\x1b[0m", e);
+            Some(cron_prompt) = cron_rx.recv() => {
+                eprintln!("\n  [cron] Executing scheduled prompt...");
+                if let Err(e) = submit_and_render(engine, &cron_prompt).await {
+                    eprintln!("\x1b[31mCron error: {}\x1b[0m", e);
+                }
+                save_current_session(engine).await;
             }
         }
     }

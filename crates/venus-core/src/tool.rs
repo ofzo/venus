@@ -68,6 +68,7 @@ pub struct ToolContext {
     pub model: String,
     pub tools: Arc<crate::tool_registry::ToolRegistry>,
     pub hook_runner: Arc<crate::hooks::HookRunner>,
+    pub cron_scheduler: Option<Arc<crate::cron::CronScheduler>>,
 }
 
 /// The core Tool trait that all tools implement.
