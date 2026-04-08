@@ -37,6 +37,9 @@ pub struct Settings {
     /// Applied to std::env during settings load, after merging all levels.
     #[serde(default)]
     pub env: Option<HashMap<String, String>>,
+    /// MCP (Model Context Protocol) server configurations.
+    #[serde(default)]
+    pub mcp_servers: Option<HashMap<String, McpServerConfig>>,
 }
 
 /// Extended thinking configuration.
@@ -94,6 +97,30 @@ pub struct PermissionRule {
     pub tool: String,
     #[serde(default)]
     pub pattern: Option<String>,
+}
+
+/// Configuration for a single MCP server.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerConfig {
+    /// Command to launch the MCP server.
+    pub command: String,
+    /// Arguments for the command.
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Environment variables for the server process.
+    #[serde(default)]
+    pub env: Option<HashMap<String, String>>,
+    /// Transport type: "stdio" (default) or "sse".
+    #[serde(default = "default_mcp_transport")]
+    pub transport: String,
+    /// URL for SSE transport.
+    #[serde(default)]
+    pub url: Option<String>,
+}
+
+fn default_mcp_transport() -> String {
+    "stdio".to_string()
 }
 
 impl Settings {
@@ -198,6 +225,9 @@ impl Settings {
             self.env
                 .get_or_insert_with(HashMap::new)
                 .extend(other_env);
+        }
+        if other.mcp_servers.is_some() {
+            self.mcp_servers = other.mcp_servers;
         }
     }
 

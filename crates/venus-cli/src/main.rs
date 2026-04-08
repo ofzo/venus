@@ -96,6 +96,27 @@ async fn main() -> Result<()> {
     all_tool_list.push(Box::new(venus_tools::skill::SkillTool::new(
         skill_registry.clone(),
     )));
+
+    // Add MCP tools if configured
+    let _mcp_manager = if let Some(ref mcp_configs) = settings.mcp_servers {
+        if !mcp_configs.is_empty() {
+            match venus_mcp::McpManager::start_all(mcp_configs).await {
+                Ok(manager) => {
+                    all_tool_list.extend(manager.all_tools());
+                    Some(manager)
+                }
+                Err(e) => {
+                    eprintln!("Warning: failed to start MCP servers: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     let tools = Arc::new(ToolRegistry::new(all_tool_list));
     let task_store = Arc::new(TaskStore::new());
     let hook_runner = Arc::new(HookRunner::new(

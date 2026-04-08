@@ -13,6 +13,7 @@ venus-utils = { path = "../venus-utils" }
 venus-permissions = { path = "../venus-permissions" }
 venus-services = { path = "../venus-services" }
 venus-tools = { path = "../venus-tools" }
+venus-mcp = { path = "../venus-mcp" }
 clap.workspace = true
 tokio.workspace = true
 ratatui.workspace = true

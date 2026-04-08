@@ -2392,6 +2392,7 @@ dependencies = [
  "tracing-subscriber",
  "unicode-width 0.2.0",
  "venus-core",
+ "venus-mcp",
  "venus-permissions",
  "venus-services",
  "venus-tools",
@@ -2412,11 +2413,26 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror",
  "tokio",
  "tokio-util",
  "tracing",
  "uuid",
+ "venus-utils",
+]
+
+[[package]]
+name = "venus-mcp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "venus-core",
  "venus-utils",
 ]
 
@@ -2471,6 +2487,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+ "uuid",
  "venus-core",
  "venus-utils",
  "walkdir",

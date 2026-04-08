@@ -6,6 +6,7 @@ members = [
     "crates/venus-permissions",
     "crates/venus-services",
     "crates/venus-tools",
+    "crates/venus-mcp",
     "crates/venus-cli",
 ]
 
