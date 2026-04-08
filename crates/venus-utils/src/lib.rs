@@ -1,5 +1,6 @@
 pub mod claudemd;
 pub mod config;
+pub mod context_window;
 pub mod cost;
 pub mod fs_helpers;
 pub mod git;

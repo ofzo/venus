@@ -32,6 +32,8 @@ pub struct QueryEngine {
     pub system_prompt: String,
     pub task_store: Arc<TaskStore>,
     pub created_at: u64,
+    /// Counter for consecutive auto-compact failures (circuit breaker).
+    pub auto_compact_failures: u32,
 }
 
 impl QueryEngine {
@@ -71,6 +73,7 @@ impl QueryEngine {
             system_prompt,
             task_store,
             created_at: chrono::Utc::now().timestamp() as u64,
+            auto_compact_failures: 0,
         })
     }
 
@@ -143,6 +146,32 @@ impl QueryEngine {
             if let Some(usage) = &assistant_msg.usage {
                 self.cost_tracker.record(&self.model, usage);
                 tx.send(StreamEvent::Usage(usage.clone())).ok();
+
+                // Check if auto-compact should trigger
+                let current_input_tokens = usage.input_tokens + usage.cache_read_tokens;
+                let threshold =
+                    venus_utils::context_window::auto_compact_threshold(&self.model);
+
+                if current_input_tokens >= threshold {
+                    let config = crate::compact::CompactConfig::from_engine(
+                        &self.model,
+                        &self.api_key,
+                        &self.base_url,
+                    );
+                    if let Ok(Some(result)) = crate::compact::auto_compact(
+                        &mut self.messages,
+                        &config,
+                        &mut self.auto_compact_failures,
+                    )
+                    .await
+                    {
+                        tx.send(StreamEvent::AutoCompacted {
+                            messages_removed: result.messages_before - result.messages_after,
+                            tokens_saved: result.tokens_saved_estimate,
+                        })
+                        .ok();
+                    }
+                }
             }
 
             // Check for tool use

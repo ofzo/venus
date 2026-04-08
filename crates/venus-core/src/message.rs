@@ -95,6 +95,29 @@ impl AssistantMessage {
     }
 }
 
+impl Message {
+    /// Returns the timestamp of this message, if available.
+    pub fn timestamp(&self) -> Option<u64> {
+        match self {
+            Message::User(m) => Some(m.timestamp),
+            Message::Assistant(m) => Some(m.timestamp),
+            Message::System(_) => None,
+        }
+    }
+
+    /// Returns true if this is a user message containing a tool result.
+    pub fn is_tool_result(&self) -> bool {
+        match self {
+            Message::User(m) => m
+                .content
+                .first()
+                .map(|b| matches!(b, ContentBlock::ToolResult { .. }))
+                .unwrap_or(false),
+            _ => false,
+        }
+    }
+}
+
 /// Convert messages to the API format expected by Anthropic Messages API.
 pub fn messages_to_api_params(messages: &[Message]) -> Vec<serde_json::Value> {
     messages

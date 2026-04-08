@@ -62,6 +62,15 @@ pub fn render_event(event: &StreamEvent) {
                 total, usage.input_tokens + usage.cache_read_tokens, usage.output_tokens
             );
         }
+        StreamEvent::AutoCompacted {
+            messages_removed,
+            tokens_saved,
+        } => {
+            eprintln!(
+                "\x1b[2m  [auto-compacted: removed {} messages, ~{} tokens saved]\x1b[0m",
+                messages_removed, tokens_saved
+            );
+        }
     }
 }
 

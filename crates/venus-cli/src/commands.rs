@@ -47,7 +47,7 @@ pub async fn handle_command(input: &str, engine: &mut QueryEngine) -> bool {
             false
         }
         "/compact" => {
-            handle_compact(engine);
+            handle_compact(engine).await;
             false
         }
         "/config" => {
@@ -272,22 +272,42 @@ async fn handle_diff(engine: &QueryEngine) {
     eprintln!();
 }
 
-/// Keep only the last N messages, dropping older ones to reduce context size.
-fn handle_compact(engine: &mut QueryEngine) {
-    const KEEP_LAST: usize = 10;
+/// Compact conversation using AI summarization, with fallback to naive truncation.
+async fn handle_compact(engine: &mut QueryEngine) {
     let total = engine.messages.len();
 
-    if total <= KEEP_LAST {
+    if total <= 4 {
         eprintln!("\n  Conversation has {} messages, nothing to compact.\n", total);
         return;
     }
 
-    let removed = total - KEEP_LAST;
-    engine.messages.drain(..removed);
-    eprintln!(
-        "\n  Compacted conversation: removed {} old messages, kept last {}.\n",
-        removed, KEEP_LAST
+    eprintln!("\n  Compacting conversation ({} messages)...", total);
+
+    let config = venus_core::compact::CompactConfig::from_engine(
+        &engine.model,
+        &engine.api_key,
+        &engine.base_url,
     );
+
+    match venus_core::compact::compact(&mut engine.messages, &config).await {
+        Ok(result) => {
+            eprintln!(
+                "  Compacted: {} -> {} messages (~{} tokens saved)\n",
+                result.messages_before, result.messages_after, result.tokens_saved_estimate,
+            );
+        }
+        Err(e) => {
+            eprintln!("  AI summarization failed: {}", e);
+            // Fallback to naive compaction
+            let keep = 10.min(total);
+            let removed = total - keep;
+            engine.messages.drain(..removed);
+            eprintln!(
+                "  Fell back to keeping last {} messages (removed {}).\n",
+                keep, removed
+            );
+        }
+    }
 }
 
 /// Display current configuration.
@@ -339,20 +359,64 @@ async fn handle_doctor(engine: &QueryEngine) {
     eprintln!();
 }
 
-/// Display conversation context info.
+/// Display rich context analysis with token breakdown.
 fn handle_context(engine: &QueryEngine) {
-    let msg_count = engine.messages.len();
-    let total_usage = engine.cost_tracker.total_usage();
-    let total_tokens = total_usage.input_tokens
-        + total_usage.output_tokens
-        + total_usage.cache_read_tokens
-        + total_usage.cache_creation_tokens;
-    let system_len = engine.system_prompt.len();
+    let analysis = venus_core::compact::analysis::analyze_context(
+        &engine.messages,
+        &engine.system_prompt,
+    );
+    let window = venus_utils::context_window::context_window_for_model(&engine.model);
+    let threshold = venus_utils::context_window::auto_compact_threshold(&engine.model);
+
+    let usage_pct = if window > 0 {
+        (analysis.total_tokens as f64 / window as f64 * 100.0) as u64
+    } else {
+        0
+    };
 
     eprintln!("\n  \x1b[1mContext info:\x1b[0m");
-    eprintln!("    Messages:            {}", msg_count);
-    eprintln!("    Total tokens used:   {}", total_tokens);
-    eprintln!("    System prompt chars: {}\n", system_len);
+    eprintln!("    Model:               {}", engine.model);
+    eprintln!("    Context window:      {} tokens", window);
+    eprintln!("    Auto-compact at:     {} tokens", threshold);
+    eprintln!("    Messages:            {}", analysis.message_count);
+    eprintln!("    Turns:               {}", analysis.turn_count);
+    eprintln!("    Usage:               ~{}% of context window", usage_pct);
+    eprintln!();
+    eprintln!("    \x1b[1mToken breakdown (estimated):\x1b[0m");
+    eprintln!("      System prompt:     {}", analysis.system_prompt_tokens);
+    eprintln!("      User text:         {}", analysis.user_text_tokens);
+    eprintln!("      Assistant text:    {}", analysis.assistant_text_tokens);
+    eprintln!(
+        "      Tool requests:     {}",
+        analysis.tool_request_tokens.values().sum::<u64>()
+    );
+    eprintln!(
+        "      Tool results:      {}",
+        analysis.tool_result_tokens.values().sum::<u64>()
+    );
+    eprintln!("      Thinking:          {}", analysis.thinking_tokens);
+    eprintln!("      \x1b[1mTotal:             {}\x1b[0m", analysis.total_tokens);
+
+    // Show per-tool breakdown if there are tool results
+    if !analysis.tool_result_tokens.is_empty() {
+        eprintln!();
+        eprintln!("    \x1b[1mTool result tokens:\x1b[0m");
+        let mut sorted: Vec<_> = analysis.tool_result_tokens.iter().collect();
+        sorted.sort_by(|a, b| b.1.cmp(a.1));
+        for (name, tokens) in sorted {
+            eprintln!("      {:<20} {}", name, tokens);
+        }
+    }
+
+    if !analysis.duplicate_file_reads.is_empty() {
+        eprintln!();
+        eprintln!("    \x1b[33mDuplicate file reads:\x1b[0m");
+        for (path, count) in &analysis.duplicate_file_reads {
+            eprintln!("      {} ({}x)", path, count);
+        }
+    }
+
+    eprintln!();
 }
 
 /// Display detailed per-model token breakdown.
@@ -415,7 +479,7 @@ fn print_help() {
     /model [name]   Show or change model
     /history        Show conversation message count
     /diff           Show git diff (staged + unstaged)
-    /compact        Compact conversation (keep last 10 messages)
+    /compact        Compact conversation with AI summarization
     /config         Show current configuration
     /doctor         Run environment diagnostics
     /context        Show context info

@@ -24,4 +24,9 @@ pub enum StreamEvent {
     Error(String),
     /// Token usage update.
     Usage(TokenUsage),
+    /// Context was auto-compacted to reduce context window usage.
+    AutoCompacted {
+        messages_removed: usize,
+        tokens_saved: u64,
+    },
 }
