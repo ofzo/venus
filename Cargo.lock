@@ -2110,6 +2110,7 @@ dependencies = [
  "async-trait",
  "globset",
  "ignore",
+ "reqwest",
  "serde",
  "serde_json",
  "thiserror",
