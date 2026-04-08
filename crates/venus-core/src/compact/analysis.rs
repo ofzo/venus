@@ -155,7 +155,7 @@ fn analyze_block(
                 }
             }
         }
-        ContentBlock::Thinking { thinking } => {
+        ContentBlock::Thinking { thinking, .. } => {
             *thinking_tokens += estimate_tokens(thinking);
         }
     }

@@ -7,6 +7,7 @@ use tracing::{debug, info};
 
 use venus_utils::claudemd;
 use venus_utils::config::Settings;
+use venus_utils::context_window;
 use venus_utils::cost::CostTracker;
 use venus_utils::git;
 
@@ -109,14 +110,44 @@ impl QueryEngine {
             let api_messages = messages_to_api_params(&self.messages);
             let tool_defs = self.tools.api_definitions();
 
-            let request = serde_json::json!({
+            // Build system prompt as array with cache_control
+            let system_blocks = serde_json::json!([{
+                "type": "text",
+                "text": self.system_prompt,
+                "cache_control": {"type": "ephemeral"}
+            }]);
+
+            // Add cache_control to the last tool definition
+            let mut tool_defs = tool_defs;
+            if let Some(last) = tool_defs.last_mut() {
+                if let Some(obj) = last.as_object_mut() {
+                    obj.insert("cache_control".into(), serde_json::json!({"type": "ephemeral"}));
+                }
+            }
+
+            // Add cache_control to last user messages for conversation turn caching
+            let api_messages = add_cache_control_to_messages(api_messages);
+
+            // Determine max_tokens: when thinking is enabled, use model's full max output
+            let thinking_param = self.build_thinking_param();
+            let max_tokens = if thinking_param.is_some() {
+                context_window::max_output_for_model(&self.model)
+            } else {
+                self.max_tokens
+            };
+
+            let mut request = serde_json::json!({
                 "model": self.model,
-                "max_tokens": self.max_tokens,
-                "system": self.system_prompt,
+                "max_tokens": max_tokens,
+                "system": system_blocks,
                 "messages": api_messages,
                 "tools": tool_defs,
                 "stream": true,
             });
+
+            if let Some(thinking) = thinking_param {
+                request.as_object_mut().unwrap().insert("thinking".into(), thinking);
+            }
 
             // Make streaming API call
             let client = reqwest::Client::builder()
@@ -405,7 +436,13 @@ impl QueryEngine {
                                     })
                                     .ok();
                                 }
-                                "thinking" => blocks[index].kind = BKind::Thinking,
+                                "thinking" => {
+                                    blocks[index].kind = BKind::Thinking;
+                                    blocks[index].signature = cb
+                                        .get("signature")
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string());
+                                }
                                 _ => {}
                             }
                         }
@@ -494,6 +531,7 @@ impl QueryEngine {
                 }
                 BKind::Thinking if !b.text.is_empty() => Some(ContentBlock::Thinking {
                     thinking: b.text.clone(),
+                    signature: b.signature.clone().unwrap_or_default(),
                 }),
                 _ => None,
             })
@@ -512,6 +550,57 @@ impl QueryEngine {
 
         Ok(msg)
     }
+
+    /// Build the thinking parameter for the API request, if applicable.
+    fn build_thinking_param(&self) -> Option<serde_json::Value> {
+        if std::env::var("CLAUDE_CODE_DISABLE_THINKING").is_ok() {
+            return None;
+        }
+        if !context_window::model_supports_thinking(&self.model) {
+            return None;
+        }
+
+        let thinking_config = self.settings.thinking.as_ref();
+        if thinking_config.and_then(|t| t.mode.as_deref()) == Some("disabled") {
+            return None;
+        }
+
+        if context_window::model_supports_adaptive_thinking(&self.model) {
+            Some(serde_json::json!({"type": "adaptive"}))
+        } else {
+            let budget = thinking_config
+                .and_then(|t| t.budget_tokens)
+                .unwrap_or_else(|| context_window::max_thinking_budget(&self.model));
+            Some(serde_json::json!({"type": "enabled", "budget_tokens": budget}))
+        }
+    }
+}
+
+/// Add cache_control to the last content block of the last 2 user messages.
+fn add_cache_control_to_messages(mut messages: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
+    let len = messages.len();
+    let mut user_count = 0;
+    for i in (0..len).rev() {
+        if user_count >= 2 {
+            break;
+        }
+        if messages[i].get("role").and_then(|v| v.as_str()) == Some("user") {
+            if let Some(content) = messages[i].get_mut("content") {
+                if let Some(arr) = content.as_array_mut() {
+                    if let Some(last_block) = arr.last_mut() {
+                        if let Some(obj) = last_block.as_object_mut() {
+                            obj.insert(
+                                "cache_control".into(),
+                                serde_json::json!({"type": "ephemeral"}),
+                            );
+                        }
+                    }
+                }
+            }
+            user_count += 1;
+        }
+    }
+    messages
 }
 
 /// Build the system prompt from context.
@@ -603,4 +692,5 @@ struct BlockBuilder {
     text: String,
     tool_id: Option<String>,
     tool_name: Option<String>,
+    signature: Option<String>,
 }

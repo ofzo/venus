@@ -56,7 +56,7 @@ pub enum ContentBlockData {
     #[serde(rename = "tool_use")]
     ToolUse { id: String, name: String },
     #[serde(rename = "thinking")]
-    Thinking { thinking: String },
+    Thinking { thinking: String, #[serde(default)] signature: String },
 }
 
 #[derive(Debug, Deserialize)]

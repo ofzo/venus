@@ -27,6 +27,20 @@ pub struct Settings {
     pub always_deny: Option<Vec<PermissionRule>>,
     #[serde(default)]
     pub hooks: Option<HookConfig>,
+    #[serde(default)]
+    pub thinking: Option<ThinkingConfig>,
+}
+
+/// Extended thinking configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThinkingConfig {
+    /// Thinking mode: "adaptive", "enabled", or "disabled".
+    #[serde(default)]
+    pub mode: Option<String>,
+    /// Budget tokens for "enabled" mode. Ignored for "adaptive".
+    #[serde(default)]
+    pub budget_tokens: Option<u32>,
 }
 
 /// Hook configuration: maps event names to lists of hook entries.
@@ -130,6 +144,9 @@ impl Settings {
         }
         if other.hooks.is_some() {
             self.hooks = other.hooks;
+        }
+        if other.thinking.is_some() {
+            self.thinking = other.thinking;
         }
     }
 

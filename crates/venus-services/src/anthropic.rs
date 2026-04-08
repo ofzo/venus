@@ -113,8 +113,9 @@ impl AnthropicClient {
                                 content_blocks[index].tool_name = Some(name.clone());
                                 on_event(StreamEvent::ToolUseStart { id, name });
                             }
-                            ContentBlockData::Thinking { .. } => {
+                            ContentBlockData::Thinking { signature, .. } => {
                                 content_blocks[index].kind = BlockKind::Thinking;
+                                content_blocks[index].signature = if signature.is_empty() { None } else { Some(signature) };
                             }
                         }
                     }
@@ -191,6 +192,7 @@ struct ContentBlockBuilder {
     text: String,
     tool_id: Option<String>,
     tool_name: Option<String>,
+    signature: Option<String>,
 }
 
 impl ContentBlockBuilder {
@@ -220,6 +222,7 @@ impl ContentBlockBuilder {
                 } else {
                     Some(ContentBlock::Thinking {
                         thinking: self.text.clone(),
+                        signature: self.signature.clone().unwrap_or_default(),
                     })
                 }
             }

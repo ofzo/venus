@@ -104,7 +104,7 @@ fn estimate_content_tokens(blocks: &[ContentBlock]) -> u64 {
             ContentBlock::ToolResult { content, .. } => {
                 total += estimate_content_tokens(content);
             }
-            ContentBlock::Thinking { thinking } => {
+            ContentBlock::Thinking { thinking, .. } => {
                 total += estimate_tokens(thinking);
             }
         }

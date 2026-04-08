@@ -55,7 +55,7 @@ pub enum ContentBlock {
         is_error: bool,
     },
     #[serde(rename = "thinking")]
-    Thinking { thinking: String },
+    Thinking { thinking: String, signature: String },
 }
 
 impl ContentBlock {
@@ -160,9 +160,10 @@ fn content_blocks_to_api(blocks: &[ContentBlock]) -> serde_json::Value {
                 "content": content_blocks_to_api(content),
                 "is_error": is_error,
             }),
-            ContentBlock::Thinking { thinking } => serde_json::json!({
+            ContentBlock::Thinking { thinking, signature } => serde_json::json!({
                 "type": "thinking",
                 "thinking": thinking,
+                "signature": signature,
             }),
         })
         .collect();

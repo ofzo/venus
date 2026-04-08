@@ -58,6 +58,26 @@ pub fn auto_compact_threshold(model: &str) -> u64 {
     window.saturating_sub(reserved).saturating_sub(AUTO_COMPACT_BUFFER)
 }
 
+/// Returns true if the model supports extended thinking.
+pub fn model_supports_thinking(model: &str) -> bool {
+    let m = model.to_lowercase();
+    m.contains("claude-sonnet-4") || m.contains("claude-opus-4")
+        || m.contains("sonnet-4") || m.contains("opus-4")
+}
+
+/// Returns true if the model supports adaptive thinking (no budget needed).
+/// Claude 4.6+ models support adaptive thinking.
+pub fn model_supports_adaptive_thinking(model: &str) -> bool {
+    let m = model.to_lowercase();
+    m.contains("4-6") || m.contains("4.6")
+}
+
+/// Returns the max thinking budget for a model in "enabled" mode.
+/// This is max_output_tokens - 1.
+pub fn max_thinking_budget(model: &str) -> u32 {
+    max_output_for_model(model).saturating_sub(1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -84,5 +104,28 @@ mod tests {
         let threshold = auto_compact_threshold("claude-opus-4-6-20250514");
         // 200_000 - 20_000 (capped) - 13_000 = 167_000
         assert_eq!(threshold, 167_000);
+    }
+
+    #[test]
+    fn test_thinking_support() {
+        assert!(model_supports_thinking("claude-opus-4-6-20250514"));
+        assert!(model_supports_thinking("claude-sonnet-4-6-20250514"));
+        assert!(model_supports_thinking("claude-sonnet-4-20250514"));
+        assert!(!model_supports_thinking("claude-haiku-4-20250506"));
+        assert!(!model_supports_thinking("unknown-model"));
+    }
+
+    #[test]
+    fn test_adaptive_thinking() {
+        assert!(model_supports_adaptive_thinking("claude-opus-4-6-20250514"));
+        assert!(model_supports_adaptive_thinking("claude-sonnet-4-6-20250514"));
+        assert!(!model_supports_adaptive_thinking("claude-sonnet-4-20250514"));
+        assert!(!model_supports_adaptive_thinking("claude-opus-4-5-20250514"));
+    }
+
+    #[test]
+    fn test_thinking_budget() {
+        assert_eq!(max_thinking_budget("claude-opus-4-6-20250514"), 63_999);
+        assert_eq!(max_thinking_budget("claude-sonnet-4-6-20250514"), 31_999);
     }
 }
