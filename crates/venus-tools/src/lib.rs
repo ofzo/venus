@@ -5,6 +5,7 @@ pub mod file_read;
 pub mod file_write;
 pub mod glob;
 pub mod grep;
+pub mod lsp;
 pub mod task_create;
 pub mod task_get;
 pub mod task_list;
@@ -22,6 +23,7 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         Box::new(file_edit::FileEditTool),
         Box::new(glob::GlobTool),
         Box::new(grep::GrepTool),
+        Box::new(lsp::LspTool::new()),
         Box::new(web_fetch::WebFetchTool),
         Box::new(web_search::WebSearchTool),
         Box::new(task_create::TaskCreateTool),
