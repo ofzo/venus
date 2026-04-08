@@ -1,6 +1,7 @@
 use anyhow::Result;
 use venus_core::engine::QueryEngine;
 use venus_core::message::ContentBlock;
+use venus_utils::session::{self, SessionMeta};
 use std::io::{self, BufRead, Write};
 
 use crate::commands;
@@ -40,7 +41,9 @@ pub async fn run_repl(engine: &mut QueryEngine) -> Result<()> {
 
         // Submit to engine
         match submit_and_render(engine, &input).await {
-            Ok(_) => {}
+            Ok(_) => {
+                save_current_session(engine).await;
+            }
             Err(e) => {
                 eprintln!("\x1b[31mError: {}\x1b[0m", e);
             }
@@ -66,4 +69,24 @@ async fn submit_and_render(engine: &mut QueryEngine, input: &str) -> Result<()> 
     }
 
     Ok(())
+}
+
+async fn save_current_session(engine: &QueryEngine) {
+    let now = chrono::Utc::now().timestamp() as u64;
+    let meta = SessionMeta {
+        id: engine.session_id.clone(),
+        project: engine.working_dir.display().to_string(),
+        created_at: engine.created_at,
+        updated_at: now,
+        message_count: engine.messages.len(),
+        model: engine.model.clone(),
+    };
+    let msg_values: Vec<serde_json::Value> = engine
+        .messages
+        .iter()
+        .filter_map(|m| serde_json::to_value(m).ok())
+        .collect();
+    if let Err(e) = session::save_session(&engine.session_id, &meta, &msg_values).await {
+        tracing::warn!("failed to save session: {}", e);
+    }
 }

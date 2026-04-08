@@ -12,6 +12,7 @@ thiserror.workspace = true
 tracing.workspace = true
 dirs.workspace = true
 chrono.workspace = true
+uuid.workspace = true
 globset.workspace = true
 walkdir.workspace = true
 ignore.workspace = true

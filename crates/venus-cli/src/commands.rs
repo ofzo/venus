@@ -1,4 +1,6 @@
 use venus_core::engine::QueryEngine;
+use venus_core::message::Message;
+use venus_utils::session;
 
 use crate::render;
 
@@ -62,6 +64,151 @@ pub async fn handle_command(input: &str, engine: &mut QueryEngine) -> bool {
         }
         "/tokens" => {
             handle_tokens(engine);
+            false
+        }
+        "/sessions" => {
+            let rt = tokio::runtime::Handle::current();
+            let result = std::thread::spawn(move || rt.block_on(session::list_sessions()))
+                .join()
+                .unwrap_or_else(|_| Ok(Vec::new()));
+
+            match result {
+                Ok(sessions) => {
+                    if sessions.is_empty() {
+                        eprintln!("  No saved sessions.\n");
+                    } else {
+                        eprintln!("\n  Saved sessions:");
+                        for (i, s) in sessions.iter().enumerate() {
+                            let time = chrono::DateTime::from_timestamp(s.updated_at as i64, 0)
+                                .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
+                                .unwrap_or_else(|| "unknown".to_string());
+                            eprintln!(
+                                "  {:>3}. {} | {} msgs | {} | {}",
+                                i + 1,
+                                &s.id[..8],
+                                s.message_count,
+                                s.model,
+                                time,
+                            );
+                        }
+                        eprintln!("\n  Use /resume <number> to resume a session.\n");
+                    }
+                }
+                Err(e) => {
+                    eprintln!("  Error listing sessions: {}\n", e);
+                }
+            }
+            false
+        }
+        "/resume" => {
+            let rt = tokio::runtime::Handle::current();
+            let arg = parts.get(1).map(|s| s.trim().to_string());
+
+            let sessions_result =
+                std::thread::spawn({
+                    let rt = rt.clone();
+                    move || rt.block_on(session::list_sessions())
+                })
+                .join()
+                .unwrap_or_else(|_| Ok(Vec::new()));
+
+            let sessions = match sessions_result {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("  Error listing sessions: {}\n", e);
+                    return false;
+                }
+            };
+
+            if sessions.is_empty() {
+                eprintln!("  No saved sessions.\n");
+                return false;
+            }
+
+            let session_id = if let Some(ref a) = arg {
+                if let Ok(idx) = a.parse::<usize>() {
+                    if idx == 0 || idx > sessions.len() {
+                        eprintln!("  Invalid session number. Use 1-{}.\n", sessions.len());
+                        return false;
+                    }
+                    sessions[idx - 1].id.clone()
+                } else {
+                    match sessions.iter().find(|s| s.id.starts_with(a.as_str())) {
+                        Some(s) => s.id.clone(),
+                        None => {
+                            eprintln!("  No session matching '{}' found.\n", a);
+                            return false;
+                        }
+                    }
+                }
+            } else {
+                eprintln!("\n  Recent sessions:");
+                let display_count = sessions.len().min(10);
+                for (i, s) in sessions.iter().take(display_count).enumerate() {
+                    let time = chrono::DateTime::from_timestamp(s.updated_at as i64, 0)
+                        .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
+                        .unwrap_or_else(|| "unknown".to_string());
+                    eprintln!(
+                        "  {:>3}. {} | {} msgs | {} | {}",
+                        i + 1,
+                        &s.id[..8],
+                        s.message_count,
+                        s.model,
+                        time,
+                    );
+                }
+                eprintln!("\n  Enter number to resume (or press Enter to cancel):");
+                eprint!("  > ");
+                std::io::Write::flush(&mut std::io::stderr()).ok();
+
+                let mut choice = String::new();
+                if std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut choice).is_err() {
+                    return false;
+                }
+                let choice = choice.trim();
+                if choice.is_empty() {
+                    eprintln!("  Cancelled.\n");
+                    return false;
+                }
+                match choice.parse::<usize>() {
+                    Ok(idx) if idx >= 1 && idx <= display_count => {
+                        sessions[idx - 1].id.clone()
+                    }
+                    _ => {
+                        eprintln!("  Invalid choice.\n");
+                        return false;
+                    }
+                }
+            };
+
+            let load_result = std::thread::spawn({
+                let rt = rt.clone();
+                let sid = session_id.clone();
+                move || rt.block_on(session::load_session(&sid))
+            })
+            .join()
+            .unwrap_or_else(|_| Err(anyhow::anyhow!("thread panic")));
+
+            match load_result {
+                Ok((meta, msg_values)) => {
+                    let messages: Vec<Message> = msg_values
+                        .iter()
+                        .filter_map(|v| serde_json::from_value(v.clone()).ok())
+                        .collect();
+                    let msg_count = messages.len();
+                    engine.messages = messages;
+                    engine.session_id = meta.id.clone();
+                    engine.created_at = meta.created_at;
+                    eprintln!(
+                        "  Resumed session {} ({} messages)\n",
+                        &meta.id[..8],
+                        msg_count,
+                    );
+                }
+                Err(e) => {
+                    eprintln!("  Error loading session: {}\n", e);
+                }
+            }
             false
         }
         _ => {
@@ -273,6 +420,8 @@ fn print_help() {
     /doctor         Run environment diagnostics
     /context        Show context info
     /tokens         Show detailed token breakdown
+    /sessions       List all saved sessions
+    /resume [n|id]  Resume a previous session
 
   Keyboard:
     Ctrl+C          Abort current query

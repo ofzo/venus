@@ -35,6 +35,10 @@ struct Cli {
     /// Working directory
     #[arg(short = 'd', long)]
     working_dir: Option<PathBuf>,
+
+    /// Resume a previous session by ID (or prefix)
+    #[arg(long)]
+    resume: Option<String>,
 }
 
 #[tokio::main]
@@ -73,6 +77,50 @@ async fn main() -> Result<()> {
     let mut engine =
         QueryEngine::new(settings.clone(), tools, permissions, working_dir.clone(), task_store).await?;
 
+    // Resume session if requested
+    if let Some(resume_id) = cli.resume {
+        match venus_utils::session::load_session(&resume_id).await {
+            Ok((meta, msg_values)) => {
+                let messages: Vec<venus_core::message::Message> = msg_values
+                    .iter()
+                    .filter_map(|v| serde_json::from_value(v.clone()).ok())
+                    .collect();
+                let msg_count = messages.len();
+                engine.messages = messages;
+                engine.session_id = meta.id.clone();
+                engine.created_at = meta.created_at;
+                eprintln!(
+                    "Resumed session {} ({} messages)",
+                    &meta.id[..8.min(meta.id.len())],
+                    msg_count,
+                );
+            }
+            Err(e) => {
+                // Try matching by prefix
+                match try_resume_by_prefix(&resume_id).await {
+                    Ok(Some((meta, msg_values))) => {
+                        let messages: Vec<venus_core::message::Message> = msg_values
+                            .iter()
+                            .filter_map(|v| serde_json::from_value(v.clone()).ok())
+                            .collect();
+                        let msg_count = messages.len();
+                        engine.messages = messages;
+                        engine.session_id = meta.id.clone();
+                        engine.created_at = meta.created_at;
+                        eprintln!(
+                            "Resumed session {} ({} messages)",
+                            &meta.id[..8.min(meta.id.len())],
+                            msg_count,
+                        );
+                    }
+                    _ => {
+                        eprintln!("Warning: could not resume session '{}': {}", resume_id, e);
+                    }
+                }
+            }
+        }
+    }
+
     // Print banner
     render::print_banner(&engine);
 
@@ -84,4 +132,16 @@ async fn main() -> Result<()> {
 
     // Interactive REPL
     repl::run_repl(&mut engine).await
+}
+
+async fn try_resume_by_prefix(
+    prefix: &str,
+) -> Result<Option<(venus_utils::session::SessionMeta, Vec<serde_json::Value>)>> {
+    let sessions = venus_utils::session::list_sessions().await?;
+    if let Some(s) = sessions.iter().find(|s| s.id.starts_with(prefix)) {
+        let (meta, msgs) = venus_utils::session::load_session(&s.id).await?;
+        Ok(Some((meta, msgs)))
+    } else {
+        Ok(None)
+    }
 }

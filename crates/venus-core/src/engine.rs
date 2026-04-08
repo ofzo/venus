@@ -17,6 +17,7 @@ use crate::tool::{PermissionDecision, PermissionHandler, ToolContext, ToolResult
 use crate::tool_registry::ToolRegistry;
 
 pub struct QueryEngine {
+    pub session_id: String,
     pub api_key: String,
     pub model: String,
     pub base_url: String,
@@ -30,6 +31,7 @@ pub struct QueryEngine {
     pub working_dir: PathBuf,
     pub system_prompt: String,
     pub task_store: Arc<TaskStore>,
+    pub created_at: u64,
 }
 
 impl QueryEngine {
@@ -54,6 +56,7 @@ impl QueryEngine {
         let system_prompt = build_system_prompt(&working_dir).await;
 
         Ok(Self {
+            session_id: uuid::Uuid::new_v4().to_string(),
             api_key,
             model,
             base_url,
@@ -67,6 +70,7 @@ impl QueryEngine {
             working_dir,
             system_prompt,
             task_store,
+            created_at: chrono::Utc::now().timestamp() as u64,
         })
     }
 
@@ -227,7 +231,7 @@ impl QueryEngine {
 
         let ctx = ToolContext {
             working_dir: self.working_dir.clone(),
-            session_id: "session".to_string(),
+            session_id: self.session_id.clone(),
             cancel_token: self.cancel_token.clone(),
             permission_handler: self.permissions.clone(),
             settings: self.settings.clone(),

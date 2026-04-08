@@ -2032,6 +2032,7 @@ name = "venus-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "crossterm",
  "dirs",
@@ -2136,6 +2137,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+ "uuid",
  "walkdir",
 ]
 
