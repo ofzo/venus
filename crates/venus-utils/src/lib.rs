@@ -4,5 +4,6 @@ pub mod context_window;
 pub mod cost;
 pub mod fs_helpers;
 pub mod git;
+pub mod memory;
 pub mod session;
 pub mod token;

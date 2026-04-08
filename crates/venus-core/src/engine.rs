@@ -780,6 +780,15 @@ async fn build_system_prompt(working_dir: &std::path::Path) -> String {
         }
     }
 
+    // Load memory content
+    if let Ok(memory_content) =
+        venus_utils::memory::load_memory_for_prompt(Some(working_dir)).await
+    {
+        if !memory_content.is_empty() {
+            parts.push(format!("\n# Memory\n{}", memory_content));
+        }
+    }
+
     parts.push(format!(
         "\n# Environment\nWorking directory: {}\nPlatform: {}\nDate: {}",
         working_dir.display(),

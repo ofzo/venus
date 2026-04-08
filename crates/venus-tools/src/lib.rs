@@ -7,6 +7,9 @@ pub mod file_write;
 pub mod glob;
 pub mod grep;
 pub mod lsp;
+pub mod memory_forget;
+pub mod memory_read;
+pub mod memory_write;
 pub mod plan;
 pub mod skill;
 pub mod task_create;
@@ -40,5 +43,8 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         Box::new(worktree::EnterWorktreeTool),
         Box::new(worktree::ExitWorktreeTool),
         Box::new(agent::AgentTool),
+        Box::new(memory_write::MemoryWriteTool),
+        Box::new(memory_read::MemoryReadTool),
+        Box::new(memory_forget::MemoryForgetTool),
     ]
 }

@@ -16,3 +16,6 @@ uuid.workspace = true
 globset.workspace = true
 walkdir.workspace = true
 ignore.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
