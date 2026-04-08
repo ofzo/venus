@@ -9,20 +9,22 @@ use crate::sse::SseParser;
 use futures_util::StreamExt;
 
 pub struct AnthropicClient {
-    api_key: String,
+    auth_header: String,
+    auth_value: String,
     base_url: String,
     http: reqwest::Client,
 }
 
 impl AnthropicClient {
-    pub fn new(api_key: String, base_url: String) -> Self {
+    pub fn new(auth_header: String, auth_value: String, base_url: String) -> Self {
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(300))
             .build()
             .expect("failed to build HTTP client");
 
         Self {
-            api_key,
+            auth_header,
+            auth_value,
             base_url,
             http,
         }
@@ -40,7 +42,7 @@ impl AnthropicClient {
         let response = self
             .http
             .post(&url)
-            .header("x-api-key", &self.api_key)
+            .header(&self.auth_header, &self.auth_value)
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json")
             .json(&request)

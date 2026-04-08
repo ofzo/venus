@@ -20,7 +20,10 @@ use crate::tool_registry::ToolRegistry;
 
 pub struct QueryEngine {
     pub session_id: String,
-    pub api_key: String,
+    /// Auth header name: "Authorization" for Bearer tokens, "x-api-key" for API keys.
+    pub auth_header: &'static str,
+    /// Auth header value: "Bearer <token>" or raw API key.
+    pub auth_value: String,
     pub model: String,
     pub base_url: String,
     pub max_tokens: u32,
@@ -49,11 +52,9 @@ impl QueryEngine {
         task_store: Arc<TaskStore>,
         hook_runner: Arc<HookRunner>,
     ) -> Result<Self> {
-        let api_key = settings
-            .api_key
-            .clone()
-            .or_else(|| std::env::var("ANTHROPIC_API_KEY").ok())
-            .context("API key required: set ANTHROPIC_API_KEY or configure api_key in settings")?;
+        let (auth_header, auth_value) = settings
+            .resolve_auth()
+            .context("API credential required: set ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, or configure in settings")?;
 
         let model = settings.effective_model().to_string();
         let base_url = settings.effective_base_url().to_string();
@@ -64,7 +65,8 @@ impl QueryEngine {
 
         Ok(Self {
             session_id: uuid::Uuid::new_v4().to_string(),
-            api_key,
+            auth_header,
+            auth_value,
             model,
             base_url,
             max_tokens,
@@ -176,7 +178,8 @@ impl QueryEngine {
                 if current_input_tokens >= threshold {
                     let config = crate::compact::CompactConfig::from_engine(
                         &self.model,
-                        &self.api_key,
+                        self.auth_header,
+                        &self.auth_value,
                         &self.base_url,
                     );
                     if let Ok(Some(result)) = crate::compact::auto_compact(
@@ -217,11 +220,16 @@ impl QueryEngine {
                 break;
             }
 
-            // Execute tool calls
-            for (id, name, input) in &tool_calls {
-                let result = self.execute_tool(id, name, input, &tx).await;
+            // Execute tool calls in parallel
+            let tool_futures: Vec<_> = tool_calls
+                .iter()
+                .map(|(id, name, input)| self.execute_tool(id, name, input, &tx))
+                .collect();
 
-                // Add tool result to messages
+            let results = futures_util::future::join_all(tool_futures).await;
+
+            // Add all tool results to messages
+            for ((id, _name, _input), result) in tool_calls.iter().zip(results) {
                 let tool_result_msg =
                     Message::User(UserMessage::new(vec![ContentBlock::tool_result(
                         id.clone(),
@@ -586,7 +594,7 @@ impl QueryEngine {
         for attempt in 0..=MAX_RETRIES {
             let result = client
                 .post(url)
-                .header("x-api-key", &self.api_key)
+                .header(self.auth_header, &self.auth_value)
                 .header("anthropic-version", "2023-06-01")
                 .header("content-type", "application/json")
                 .body(body.to_string())
@@ -760,7 +768,7 @@ impl SseParserInline {
         let mut data_lines = Vec::new();
 
         for line in raw.lines() {
-            if let Some(v) = line.strip_prefix("event: ") {
+            if let Some(v) = line.strip_prefix("event:") {
                 event_type = v.trim().to_string();
             } else if let Some(v) = line.strip_prefix("data: ") {
                 data_lines.push(v.to_string());

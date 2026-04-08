@@ -285,7 +285,8 @@ async fn handle_compact(engine: &mut QueryEngine) {
 
     let config = venus_core::compact::CompactConfig::from_engine(
         &engine.model,
-        &engine.api_key,
+        engine.auth_header,
+        &engine.auth_value,
         &engine.base_url,
     );
 
@@ -352,9 +353,11 @@ async fn handle_doctor(engine: &QueryEngine) {
     let rg_ok = check_command("rg", &["--version"], &engine.working_dir).await;
     print_check("rg (ripgrep)", rg_ok);
 
-    // Check ANTHROPIC_API_KEY
-    let api_key_set = std::env::var("ANTHROPIC_API_KEY").is_ok();
-    print_check("ANTHROPIC_API_KEY", api_key_set);
+    // Check API credentials
+    let has_api_key = std::env::var("ANTHROPIC_API_KEY").is_ok();
+    let has_auth_token = std::env::var("CLAUDE_CODE_OAUTH_TOKEN").is_ok()
+        || std::env::var("ANTHROPIC_AUTH_TOKEN").is_ok();
+    print_check("API credential (key or token)", has_api_key || has_auth_token);
 
     // Check ~/.claude/settings.json
     let settings_path = dirs_path("settings.json");

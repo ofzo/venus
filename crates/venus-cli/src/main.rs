@@ -57,20 +57,21 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
-    // Load settings
-    let mut settings = Settings::load().context("failed to load settings")?;
+    let working_dir = cli
+        .working_dir
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
-    // CLI overrides
+    // Load settings with multi-level merging (global → project → env vars)
+    let mut settings =
+        Settings::load_with_project(Some(&working_dir)).context("failed to load settings")?;
+
+    // CLI overrides (highest priority)
     if let Some(model) = cli.model {
         settings.model = Some(model);
     }
     if let Some(key) = cli.api_key {
         settings.api_key = Some(key);
     }
-
-    let working_dir = cli
-        .working_dir
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
     let settings = Arc::new(settings);
     let permissions = Arc::new(InteractivePermissionHandler::new(settings.clone()));

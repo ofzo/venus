@@ -29,8 +29,10 @@ pub struct CompactConfig {
     pub keep_recent_groups: usize,
     /// Model to use for the summarization call.
     pub model: String,
-    /// Anthropic API key.
-    pub api_key: String,
+    /// Auth header name ("Authorization" or "x-api-key").
+    pub auth_header: String,
+    /// Auth header value ("Bearer <token>" or raw API key).
+    pub auth_value: String,
     /// Anthropic API base URL.
     pub base_url: String,
     /// Maximum tokens for the summary output.
@@ -39,11 +41,12 @@ pub struct CompactConfig {
 
 impl CompactConfig {
     /// Create a config with sensible defaults from engine parameters.
-    pub fn from_engine(model: &str, api_key: &str, base_url: &str) -> Self {
+    pub fn from_engine(model: &str, auth_header: &str, auth_value: &str, base_url: &str) -> Self {
         Self {
             keep_recent_groups: 2,
             model: model.to_string(),
-            api_key: api_key.to_string(),
+            auth_header: auth_header.to_string(),
+            auth_value: auth_value.to_string(),
             base_url: base_url.to_string(),
             max_summary_tokens: 8192,
         }
@@ -137,7 +140,8 @@ pub async fn compact_with_hooks(
         );
 
         match call_summarization_api(
-            &config.api_key,
+            &config.auth_header,
+            &config.auth_value,
             &config.base_url,
             &config.model,
             &system,
@@ -262,7 +266,8 @@ pub async fn auto_compact(
 /// Uses the same reqwest pattern as `engine.rs` to avoid a dependency
 /// on `venus-services` (which would create a circular dependency).
 async fn call_summarization_api(
-    api_key: &str,
+    auth_header: &str,
+    auth_value: &str,
     base_url: &str,
     model: &str,
     system: &str,
@@ -298,7 +303,7 @@ async fn call_summarization_api(
     for attempt in 0..=MAX_RETRIES {
         let result = client
             .post(&url)
-            .header("x-api-key", api_key)
+            .header(auth_header, auth_value)
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json")
             .body(request_body.clone())
