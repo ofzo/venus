@@ -149,32 +149,17 @@ impl QueryEngine {
                 request.as_object_mut().unwrap().insert("thinking".into(), thinking);
             }
 
-            // Make streaming API call
+            // Make streaming API call with retry (covers both connection and mid-stream failures)
             let client = reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(300))
                 .build()?;
 
             let url = format!("{}/v1/messages", self.base_url);
-            let response = client
-                .post(&url)
-                .header("x-api-key", &self.api_key)
-                .header("anthropic-version", "2023-06-01")
-                .header("content-type", "application/json")
-                .body(serde_json::to_string(&request)?)
-                .send()
-                .await
-                .context("API request failed")?;
+            let request_body = serde_json::to_string(&request)?;
 
-            let status = response.status();
-            if !status.is_success() {
-                let body = response.text().await.unwrap_or_default();
-                let err_msg = format!("API error ({}): {}", status, &body[..body.len().min(500)]);
-                tx.send(StreamEvent::Error(err_msg.clone())).ok();
-                return Err(anyhow::anyhow!(err_msg));
-            }
-
-            // Parse SSE stream
-            let assistant_msg = self.process_sse_stream(response, &tx).await?;
+            let assistant_msg = self
+                .stream_with_retry(&client, &url, &request_body, &tx)
+                .await?;
 
             let stop_reason = assistant_msg.stop_reason.clone();
 
@@ -549,6 +534,117 @@ impl QueryEngine {
         tx.send(StreamEvent::MessageComplete(msg.clone())).ok();
 
         Ok(msg)
+    }
+
+    /// Send request + process stream, retrying on mid-stream failures.
+    async fn stream_with_retry(
+        &self,
+        client: &reqwest::Client,
+        url: &str,
+        body: &str,
+        tx: &mpsc::UnboundedSender<StreamEvent>,
+    ) -> Result<AssistantMessage> {
+        const STREAM_RETRIES: u32 = 2;
+
+        for attempt in 0..=STREAM_RETRIES {
+            let response = self
+                .send_with_retry(client, url, body, tx)
+                .await?;
+
+            match self.process_sse_stream(response, tx).await {
+                Ok(msg) => return Ok(msg),
+                Err(e) if attempt < STREAM_RETRIES => {
+                    debug!(
+                        "stream interrupted, retrying (attempt {}/{}): {}",
+                        attempt + 1, STREAM_RETRIES, e
+                    );
+                    tx.send(StreamEvent::Error(
+                        "Stream interrupted, reconnecting...".to_string(),
+                    ))
+                    .ok();
+                    let delay = 1000u64 * 2u64.pow(attempt);
+                    tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                }
+                Err(e) => return Err(e).context("stream processing failed after retries"),
+            }
+        }
+
+        Err(anyhow::anyhow!("stream retries exhausted"))
+    }
+
+    /// Send an API request with exponential backoff retry for rate limits and server errors.
+    async fn send_with_retry(
+        &self,
+        client: &reqwest::Client,
+        url: &str,
+        body: &str,
+        tx: &mpsc::UnboundedSender<StreamEvent>,
+    ) -> Result<reqwest::Response> {
+        const MAX_RETRIES: u32 = 5;
+        const BASE_DELAY_MS: u64 = 1000;
+
+        for attempt in 0..=MAX_RETRIES {
+            let result = client
+                .post(url)
+                .header("x-api-key", &self.api_key)
+                .header("anthropic-version", "2023-06-01")
+                .header("content-type", "application/json")
+                .body(body.to_string())
+                .send()
+                .await;
+
+            let response = match result {
+                Ok(r) => r,
+                Err(e) if attempt < MAX_RETRIES && e.is_timeout() => {
+                    let delay = BASE_DELAY_MS * 2u64.pow(attempt);
+                    debug!("request timeout, retrying in {}ms (attempt {}/{})", delay, attempt + 1, MAX_RETRIES);
+                    tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                    continue;
+                }
+                Err(e) => return Err(e).context("API request failed"),
+            };
+
+            let status = response.status();
+            if status.is_success() {
+                return Ok(response);
+            }
+
+            let status_code = status.as_u16();
+            let is_retryable = status_code == 429 || status_code == 529 || status_code >= 500;
+
+            if !is_retryable || attempt >= MAX_RETRIES {
+                let body_text = response.text().await.unwrap_or_default();
+                let err_msg = format!("API error ({}): {}", status, &body_text[..body_text.len().min(500)]);
+                tx.send(StreamEvent::Error(err_msg.clone())).ok();
+                return Err(anyhow::anyhow!(err_msg));
+            }
+
+            // Parse Retry-After header if present
+            let retry_after_ms = response
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse::<u64>().ok())
+                .map(|secs| secs * 1000);
+
+            let delay = retry_after_ms.unwrap_or_else(|| BASE_DELAY_MS * 2u64.pow(attempt));
+            let delay = delay.min(60_000); // cap at 60s
+
+            debug!(
+                "API returned {}, retrying in {}ms (attempt {}/{})",
+                status_code, delay, attempt + 1, MAX_RETRIES
+            );
+            tx.send(StreamEvent::Error(format!(
+                "Rate limited ({}), retrying in {:.1}s...",
+                status_code,
+                delay as f64 / 1000.0
+            )))
+            .ok();
+
+            tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+        }
+
+        Err(anyhow::anyhow!("max retries exceeded"))
     }
 
     /// Build the thinking parameter for the API request, if applicable.

@@ -288,21 +288,50 @@ async fn call_summarization_api(
         "stream": false,
     });
 
-    let response = client
-        .post(&url)
-        .header("x-api-key", api_key)
-        .header("anthropic-version", "2023-06-01")
-        .header("content-type", "application/json")
-        .body(serde_json::to_string(&request)?)
-        .send()
-        .await
-        .context("summarization API request failed")?;
+    let request_body = serde_json::to_string(&request)?;
 
-    let status = response.status();
-    let body = response.text().await.unwrap_or_default();
+    // Retry loop with exponential backoff for rate limits and server errors
+    const MAX_RETRIES: u32 = 3;
+    const BASE_DELAY_MS: u64 = 1000;
 
-    if !status.is_success() {
-        anyhow::bail!("summarization API error ({}): {}", status, &body[..body.len().min(500)]);
+    let mut body = String::new();
+    for attempt in 0..=MAX_RETRIES {
+        let result = client
+            .post(&url)
+            .header("x-api-key", api_key)
+            .header("anthropic-version", "2023-06-01")
+            .header("content-type", "application/json")
+            .body(request_body.clone())
+            .send()
+            .await;
+
+        let response = match result {
+            Ok(r) => r,
+            Err(e) if attempt < MAX_RETRIES && e.is_timeout() => {
+                let delay = BASE_DELAY_MS * 2u64.pow(attempt);
+                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                continue;
+            }
+            Err(e) => return Err(e).context("summarization API request failed"),
+        };
+
+        let status = response.status();
+        body = response.text().await.unwrap_or_default();
+
+        if status.is_success() {
+            break;
+        }
+
+        let status_code = status.as_u16();
+        let is_retryable = status_code == 429 || status_code == 529 || status_code >= 500;
+
+        if !is_retryable || attempt >= MAX_RETRIES {
+            anyhow::bail!("summarization API error ({}): {}", status, &body[..body.len().min(500)]);
+        }
+
+        let delay = BASE_DELAY_MS * 2u64.pow(attempt);
+        tracing::debug!("summarization API returned {}, retrying in {}ms", status_code, delay);
+        tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
     }
 
     // Parse the response to extract the text content
