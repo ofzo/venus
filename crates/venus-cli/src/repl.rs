@@ -3,15 +3,13 @@ use venus_core::engine::QueryEngine;
 use venus_core::hooks::events::HookEvent;
 use venus_core::message::ContentBlock;
 use venus_utils::session::{self, SessionMeta};
-use std::io::{self, BufRead, Write};
 
 use crate::commands;
+use crate::input::{self, InputEditor};
 use crate::markdown::MarkdownRenderer;
 use crate::render;
 
 pub async fn run_repl(engine: &mut QueryEngine) -> Result<()> {
-    let stdin = io::stdin();
-
     // Fire SessionStart hook
     engine
         .hook_runner
@@ -22,25 +20,20 @@ pub async fn run_repl(engine: &mut QueryEngine) -> Result<()> {
         })
         .await;
 
+    let history_path = input::default_history_path();
+    let mut editor = InputEditor::new(history_path);
+
     loop {
-        // Print prompt
-        eprint!("\x1b[1;32m> \x1b[0m");
-        io::stderr().flush()?;
+        let line = tokio::task::block_in_place(|| editor.read_line());
 
-        // Read input line
-        let mut input = String::new();
-        let bytes = stdin.lock().read_line(&mut input)?;
-
-        // EOF (Ctrl+D)
-        if bytes == 0 {
-            eprintln!("\nGoodbye!");
-            break;
-        }
-
-        let input = input.trim().to_string();
-        if input.is_empty() {
-            continue;
-        }
+        let input = match line {
+            Some(s) if s.is_empty() => continue,
+            Some(s) => s,
+            None => {
+                eprintln!("\nGoodbye!");
+                break;
+            }
+        };
 
         // Handle slash commands
         if input.starts_with('/') {

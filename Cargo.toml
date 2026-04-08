@@ -56,6 +56,7 @@ dirs = "6"
 regex = "1"
 pin-project-lite = "0.2"
 bytes = "1"
+reedline = "0.46"
 termimad = "0.31"
 syntect = { version = "5", default-features = false, features = ["default-syntaxes", "default-themes", "parsing", "regex-onig"] }
 unicode-width = "0.2"
