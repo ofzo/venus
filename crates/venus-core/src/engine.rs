@@ -12,6 +12,7 @@ use venus_utils::git;
 
 use crate::message::*;
 use crate::stream::StreamEvent;
+use crate::task::TaskStore;
 use crate::tool::{PermissionDecision, PermissionHandler, ToolContext, ToolResult};
 use crate::tool_registry::ToolRegistry;
 
@@ -28,6 +29,7 @@ pub struct QueryEngine {
     pub cancel_token: CancellationToken,
     pub working_dir: PathBuf,
     pub system_prompt: String,
+    pub task_store: Arc<TaskStore>,
 }
 
 impl QueryEngine {
@@ -36,6 +38,7 @@ impl QueryEngine {
         tools: Arc<ToolRegistry>,
         permissions: Arc<dyn PermissionHandler>,
         working_dir: PathBuf,
+        task_store: Arc<TaskStore>,
     ) -> Result<Self> {
         let api_key = settings
             .api_key
@@ -63,6 +66,7 @@ impl QueryEngine {
             cancel_token: CancellationToken::new(),
             working_dir,
             system_prompt,
+            task_store,
         })
     }
 
@@ -227,6 +231,7 @@ impl QueryEngine {
             cancel_token: self.cancel_token.clone(),
             permission_handler: self.permissions.clone(),
             settings: self.settings.clone(),
+            task_store: self.task_store.clone(),
         };
 
         info!("executing tool: {} with input: {}", name, input);

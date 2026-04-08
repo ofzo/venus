@@ -6,6 +6,7 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 use crate::message::ContentBlock;
+use crate::task::TaskStore;
 use venus_utils::config::Settings;
 
 /// Result of a tool execution.
@@ -55,6 +56,7 @@ pub struct ToolContext {
     pub cancel_token: CancellationToken,
     pub permission_handler: Arc<dyn PermissionHandler>,
     pub settings: Arc<Settings>,
+    pub task_store: Arc<TaskStore>,
 }
 
 /// The core Tool trait that all tools implement.

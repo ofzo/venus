@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use venus_core::engine::QueryEngine;
+use venus_core::task::TaskStore;
 use venus_core::tool_registry::ToolRegistry;
 use venus_permissions::interactive::InteractivePermissionHandler;
 use venus_utils::config::Settings;
@@ -67,9 +68,10 @@ async fn main() -> Result<()> {
     let settings = Arc::new(settings);
     let permissions = Arc::new(InteractivePermissionHandler::new());
     let tools = Arc::new(ToolRegistry::new(venus_tools::all_tools()));
+    let task_store = Arc::new(TaskStore::new());
 
     let mut engine =
-        QueryEngine::new(settings.clone(), tools, permissions, working_dir.clone()).await?;
+        QueryEngine::new(settings.clone(), tools, permissions, working_dir.clone(), task_store).await?;
 
     // Print banner
     render::print_banner(&engine);
