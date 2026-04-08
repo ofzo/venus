@@ -1,3 +1,4 @@
+pub mod ask_user;
 pub mod bash;
 pub mod file_edit;
 pub mod file_read;
@@ -27,5 +28,6 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         Box::new(task_update::TaskUpdateTool),
         Box::new(task_get::TaskGetTool),
         Box::new(task_list::TaskListTool),
+        Box::new(ask_user::AskUserTool),
     ]
 }
