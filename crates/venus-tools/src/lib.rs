@@ -1,3 +1,4 @@
+pub mod agent;
 pub mod ask_user;
 pub mod bash;
 pub mod file_edit;
@@ -37,5 +38,6 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         Box::new(plan::ExitPlanModeTool),
         Box::new(worktree::EnterWorktreeTool),
         Box::new(worktree::ExitWorktreeTool),
+        Box::new(agent::AgentTool),
     ]
 }

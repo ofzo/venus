@@ -59,6 +59,13 @@ pub struct ToolContext {
     pub settings: Arc<Settings>,
     pub task_store: Arc<TaskStore>,
     pub plan_mode: Arc<AtomicBool>,
+    // Fields needed for sub-agent spawning
+    pub auth_header: &'static str,
+    pub auth_value: String,
+    pub base_url: String,
+    pub model: String,
+    pub tools: Arc<crate::tool_registry::ToolRegistry>,
+    pub hook_runner: Arc<crate::hooks::HookRunner>,
 }
 
 /// The core Tool trait that all tools implement.

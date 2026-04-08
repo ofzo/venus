@@ -89,6 +89,45 @@ impl QueryEngine {
         })
     }
 
+    /// Create a QueryEngine for a sub-agent with a custom system prompt.
+    /// Skips the expensive build_system_prompt (git context, CLAUDE.md loading).
+    pub fn new_for_subagent(
+        auth_header: &'static str,
+        auth_value: String,
+        model: String,
+        base_url: String,
+        max_tokens: u32,
+        system_prompt: String,
+        tools: Arc<ToolRegistry>,
+        settings: Arc<Settings>,
+        permissions: Arc<dyn PermissionHandler>,
+        working_dir: PathBuf,
+        task_store: Arc<TaskStore>,
+        hook_runner: Arc<HookRunner>,
+    ) -> Self {
+        Self {
+            session_id: uuid::Uuid::new_v4().to_string(),
+            auth_header,
+            auth_value,
+            model,
+            base_url,
+            max_tokens,
+            messages: Vec::new(),
+            tools,
+            settings,
+            permissions,
+            cost_tracker: CostTracker::new(),
+            cancel_token: CancellationToken::new(),
+            working_dir,
+            system_prompt,
+            task_store,
+            created_at: chrono::Utc::now().timestamp() as u64,
+            auto_compact_failures: 0,
+            hook_runner,
+            plan_mode: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
     /// Submit a user message and process the full query-tool loop.
     /// Events are sent through the returned receiver.
     pub async fn submit_message(
@@ -320,6 +359,12 @@ impl QueryEngine {
             settings: self.settings.clone(),
             task_store: self.task_store.clone(),
             plan_mode: self.plan_mode.clone(),
+            auth_header: self.auth_header,
+            auth_value: self.auth_value.clone(),
+            base_url: self.base_url.clone(),
+            model: self.model.clone(),
+            tools: self.tools.clone(),
+            hook_runner: self.hook_runner.clone(),
         };
 
         info!("executing tool: {} with input: {}", name, &effective_input);

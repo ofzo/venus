@@ -4,6 +4,7 @@ pub mod hooks;
 pub mod lsp;
 pub mod message;
 pub mod stream;
+pub mod subagent;
 pub mod task;
 pub mod tool;
 pub mod tool_registry;
