@@ -8,6 +8,7 @@ pub mod glob;
 pub mod grep;
 pub mod lsp;
 pub mod plan;
+pub mod skill;
 pub mod task_create;
 pub mod task_get;
 pub mod task_list;

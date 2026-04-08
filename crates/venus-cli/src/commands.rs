@@ -1,11 +1,28 @@
+use std::sync::Arc;
+
 use venus_core::engine::QueryEngine;
 use venus_core::message::Message;
+use venus_core::skill::SkillRegistry;
 use venus_utils::session;
 
 use crate::render;
 
-/// Handle a slash command. Returns true if REPL should exit.
-pub async fn handle_command(input: &str, engine: &mut QueryEngine) -> bool {
+/// Result of handling a slash command.
+pub enum CommandResult {
+    /// Continue the REPL normally.
+    Continue,
+    /// Exit the REPL.
+    Exit,
+    /// Inject a message as if the user typed it (used for skill invocation).
+    InjectMessage(String),
+}
+
+/// Handle a slash command.
+pub async fn handle_command(
+    input: &str,
+    engine: &mut QueryEngine,
+    skill_registry: Option<&Arc<SkillRegistry>>,
+) -> CommandResult {
     let parts: Vec<&str> = input.splitn(2, ' ').collect();
     let cmd = parts[0];
     let _args = parts.get(1).unwrap_or(&"");
@@ -13,20 +30,20 @@ pub async fn handle_command(input: &str, engine: &mut QueryEngine) -> bool {
     match cmd {
         "/exit" | "/quit" | "/q" => {
             eprintln!("Goodbye!");
-            true
+            CommandResult::Exit
         }
         "/help" | "/h" => {
             print_help();
-            false
+            CommandResult::Continue
         }
         "/clear" => {
             engine.messages.clear();
             eprintln!("  Conversation cleared.\n");
-            false
+            CommandResult::Continue
         }
         "/cost" => {
             render::print_cost(engine);
-            false
+            CommandResult::Continue
         }
         "/model" => {
             if let Some(model) = parts.get(1) {
@@ -35,36 +52,36 @@ pub async fn handle_command(input: &str, engine: &mut QueryEngine) -> bool {
             } else {
                 eprintln!("  Current model: {}\n", engine.model);
             }
-            false
+            CommandResult::Continue
         }
         "/history" => {
             let count = engine.messages.len();
             eprintln!("  {} messages in conversation\n", count);
-            false
+            CommandResult::Continue
         }
         "/diff" => {
             handle_diff(engine).await;
-            false
+            CommandResult::Continue
         }
         "/compact" => {
             handle_compact(engine).await;
-            false
+            CommandResult::Continue
         }
         "/config" => {
             handle_config(engine);
-            false
+            CommandResult::Continue
         }
         "/doctor" => {
             handle_doctor(engine).await;
-            false
+            CommandResult::Continue
         }
         "/context" => {
             handle_context(engine);
-            false
+            CommandResult::Continue
         }
         "/tokens" => {
             handle_tokens(engine);
-            false
+            CommandResult::Continue
         }
         "/sessions" => {
             let rt = tokio::runtime::Handle::current();
@@ -98,7 +115,7 @@ pub async fn handle_command(input: &str, engine: &mut QueryEngine) -> bool {
                     eprintln!("  Error listing sessions: {}\n", e);
                 }
             }
-            false
+            CommandResult::Continue
         }
         "/resume" => {
             let rt = tokio::runtime::Handle::current();
@@ -116,20 +133,20 @@ pub async fn handle_command(input: &str, engine: &mut QueryEngine) -> bool {
                 Ok(s) => s,
                 Err(e) => {
                     eprintln!("  Error listing sessions: {}\n", e);
-                    return false;
+                    return CommandResult::Continue;
                 }
             };
 
             if sessions.is_empty() {
                 eprintln!("  No saved sessions.\n");
-                return false;
+                return CommandResult::Continue;
             }
 
             let session_id = if let Some(ref a) = arg {
                 if let Ok(idx) = a.parse::<usize>() {
                     if idx == 0 || idx > sessions.len() {
                         eprintln!("  Invalid session number. Use 1-{}.\n", sessions.len());
-                        return false;
+                        return CommandResult::Continue;
                     }
                     sessions[idx - 1].id.clone()
                 } else {
@@ -137,7 +154,7 @@ pub async fn handle_command(input: &str, engine: &mut QueryEngine) -> bool {
                         Some(s) => s.id.clone(),
                         None => {
                             eprintln!("  No session matching '{}' found.\n", a);
-                            return false;
+                            return CommandResult::Continue;
                         }
                     }
                 }
@@ -163,12 +180,12 @@ pub async fn handle_command(input: &str, engine: &mut QueryEngine) -> bool {
 
                 let mut choice = String::new();
                 if std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut choice).is_err() {
-                    return false;
+                    return CommandResult::Continue;
                 }
                 let choice = choice.trim();
                 if choice.is_empty() {
                     eprintln!("  Cancelled.\n");
-                    return false;
+                    return CommandResult::Continue;
                 }
                 match choice.parse::<usize>() {
                     Ok(idx) if idx >= 1 && idx <= display_count => {
@@ -176,7 +193,7 @@ pub async fn handle_command(input: &str, engine: &mut QueryEngine) -> bool {
                     }
                     _ => {
                         eprintln!("  Invalid choice.\n");
-                        return false;
+                        return CommandResult::Continue;
                     }
                 }
             };
@@ -209,12 +226,27 @@ pub async fn handle_command(input: &str, engine: &mut QueryEngine) -> bool {
                     eprintln!("  Error loading session: {}\n", e);
                 }
             }
-            false
+            CommandResult::Continue
         }
         _ => {
+            // Check if it matches a user-invocable skill
+            let skill_name = &cmd[1..]; // strip leading /
+            if let Some(skill) = skill_registry
+                .and_then(|r| r.find(skill_name))
+                .filter(|s| s.user_invocable)
+            {
+                eprintln!("  Invoking skill: {}", skill.name);
+                let content = if let Some(args) = parts.get(1) {
+                    format!("{}\n\nArguments: {}", skill.content, args)
+                } else {
+                    skill.content.clone()
+                };
+                return CommandResult::InjectMessage(content);
+            }
+
             eprintln!("  Unknown command: {}", cmd);
             eprintln!("  Type /help for available commands\n");
-            false
+            CommandResult::Continue
         }
     }
 }

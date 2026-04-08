@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use venus_core::engine::QueryEngine;
 use venus_core::hooks::HookRunner;
+use venus_core::skill::SkillRegistry;
 use venus_core::task::TaskStore;
 use venus_core::tool_registry::ToolRegistry;
 use venus_permissions::interactive::InteractivePermissionHandler;
@@ -75,7 +76,27 @@ async fn main() -> Result<()> {
 
     let settings = Arc::new(settings);
     let permissions = Arc::new(InteractivePermissionHandler::new(settings.clone()));
-    let tools = Arc::new(ToolRegistry::new(venus_tools::all_tools()));
+
+    // Load skills from ~/.claude/skills/ and <project>/.claude/skills/
+    let skill_dirs = vec![
+        dirs::home_dir()
+            .unwrap_or_default()
+            .join(".claude")
+            .join("skills"),
+        working_dir.join(".claude").join("skills"),
+    ];
+    let skill_registry = Arc::new(
+        SkillRegistry::load_from_dirs(&skill_dirs)
+            .await
+            .unwrap_or_else(|_| SkillRegistry::new()),
+    );
+
+    // Build tool list, including SkillTool with the loaded registry
+    let mut all_tool_list = venus_tools::all_tools();
+    all_tool_list.push(Box::new(venus_tools::skill::SkillTool::new(
+        skill_registry.clone(),
+    )));
+    let tools = Arc::new(ToolRegistry::new(all_tool_list));
     let task_store = Arc::new(TaskStore::new());
     let hook_runner = Arc::new(HookRunner::new(
         settings.hooks.clone(),
@@ -140,7 +161,7 @@ async fn main() -> Result<()> {
     }
 
     // Interactive REPL
-    repl::run_repl(&mut engine).await
+    repl::run_repl(&mut engine, Some(skill_registry)).await
 }
 
 async fn try_resume_by_prefix(

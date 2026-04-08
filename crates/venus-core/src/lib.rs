@@ -3,6 +3,7 @@ pub mod engine;
 pub mod hooks;
 pub mod lsp;
 pub mod message;
+pub mod skill;
 pub mod stream;
 pub mod subagent;
 pub mod task;

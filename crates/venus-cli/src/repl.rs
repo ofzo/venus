@@ -1,15 +1,18 @@
+use std::sync::Arc;
+
 use anyhow::Result;
 use venus_core::engine::QueryEngine;
 use venus_core::hooks::events::HookEvent;
 use venus_core::message::ContentBlock;
+use venus_core::skill::SkillRegistry;
 use venus_utils::session::{self, SessionMeta};
 
-use crate::commands;
+use crate::commands::{self, CommandResult};
 use crate::input::{self, InputEditor};
 use crate::markdown::MarkdownRenderer;
 use crate::render;
 
-pub async fn run_repl(engine: &mut QueryEngine) -> Result<()> {
+pub async fn run_repl(engine: &mut QueryEngine, skill_registry: Option<Arc<SkillRegistry>>) -> Result<()> {
     // Fire SessionStart hook
     engine
         .hook_runner
@@ -37,9 +40,15 @@ pub async fn run_repl(engine: &mut QueryEngine) -> Result<()> {
 
         // Handle slash commands
         if input.starts_with('/') {
-            let should_exit = commands::handle_command(&input, engine).await;
-            if should_exit {
-                break;
+            match commands::handle_command(&input, engine, skill_registry.as_ref()).await {
+                CommandResult::Exit => break,
+                CommandResult::InjectMessage(msg) => {
+                    match submit_and_render(engine, &msg).await {
+                        Ok(_) => save_current_session(engine).await,
+                        Err(e) => eprintln!("\x1b[31mError: {}\x1b[0m", e),
+                    }
+                }
+                CommandResult::Continue => {}
             }
             continue;
         }

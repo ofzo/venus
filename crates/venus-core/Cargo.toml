@@ -3,6 +3,9 @@ name = "venus-core"
 version.workspace = true
 edition.workspace = true
 
+[dev-dependencies]
+tempfile = "3"
+
 [dependencies]
 venus-utils = { path = "../venus-utils" }
 serde.workspace = true
