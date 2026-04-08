@@ -6,6 +6,7 @@ use venus_utils::session::{self, SessionMeta};
 use std::io::{self, BufRead, Write};
 
 use crate::commands;
+use crate::markdown::MarkdownRenderer;
 use crate::render;
 
 pub async fn run_repl(engine: &mut QueryEngine) -> Result<()> {
@@ -104,9 +105,12 @@ async fn submit_and_render(engine: &mut QueryEngine, input: &str) -> Result<()> 
     // submit_message runs the full query-tool loop and buffers events in the channel
     let mut rx = engine.submit_message(content).await?;
 
+    // Create a markdown renderer for this response
+    let mut md = MarkdownRenderer::new();
+
     // Drain all buffered events
     while let Some(event) = rx.recv().await {
-        render::render_event(&event);
+        render::render_event(&event, &mut md);
     }
 
     Ok(())
