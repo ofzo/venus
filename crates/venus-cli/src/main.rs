@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use venus_core::engine::QueryEngine;
+use venus_core::hooks::HookRunner;
 use venus_core::task::TaskStore;
 use venus_core::tool_registry::ToolRegistry;
 use venus_permissions::interactive::InteractivePermissionHandler;
@@ -70,12 +71,17 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
     let settings = Arc::new(settings);
-    let permissions = Arc::new(InteractivePermissionHandler::new());
+    let permissions = Arc::new(InteractivePermissionHandler::new(settings.clone()));
     let tools = Arc::new(ToolRegistry::new(venus_tools::all_tools()));
     let task_store = Arc::new(TaskStore::new());
+    let hook_runner = Arc::new(HookRunner::new(
+        settings.hooks.clone(),
+        String::new(),
+        working_dir.clone(),
+    ));
 
     let mut engine =
-        QueryEngine::new(settings.clone(), tools, permissions, working_dir.clone(), task_store).await?;
+        QueryEngine::new(settings.clone(), tools, permissions, working_dir.clone(), task_store, hook_runner).await?;
 
     // Resume session if requested
     if let Some(resume_id) = cli.resume {

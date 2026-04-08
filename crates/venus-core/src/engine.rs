@@ -10,6 +10,7 @@ use venus_utils::config::Settings;
 use venus_utils::cost::CostTracker;
 use venus_utils::git;
 
+use crate::hooks::HookRunner;
 use crate::message::*;
 use crate::stream::StreamEvent;
 use crate::task::TaskStore;
@@ -34,6 +35,8 @@ pub struct QueryEngine {
     pub created_at: u64,
     /// Counter for consecutive auto-compact failures (circuit breaker).
     pub auto_compact_failures: u32,
+    /// Hook runner for lifecycle event hooks.
+    pub hook_runner: Arc<HookRunner>,
 }
 
 impl QueryEngine {
@@ -43,6 +46,7 @@ impl QueryEngine {
         permissions: Arc<dyn PermissionHandler>,
         working_dir: PathBuf,
         task_store: Arc<TaskStore>,
+        hook_runner: Arc<HookRunner>,
     ) -> Result<Self> {
         let api_key = settings
             .api_key
@@ -74,6 +78,7 @@ impl QueryEngine {
             task_store,
             created_at: chrono::Utc::now().timestamp() as u64,
             auto_compact_failures: 0,
+            hook_runner,
         })
     }
 
@@ -223,8 +228,29 @@ impl QueryEngine {
         input: &serde_json::Value,
         tx: &mpsc::UnboundedSender<StreamEvent>,
     ) -> ToolResult {
+        // Run PreToolUse hooks
+        let mut effective_input = input.clone();
+        if let Ok(hook_resp) = self.hook_runner.run_pre_tool_use(name, input).await {
+            if hook_resp.decision.as_deref() == Some("deny") {
+                let reason = hook_resp
+                    .reason
+                    .unwrap_or_else(|| "blocked by hook".into());
+                let result = ToolResult::error(format!("Hook denied: {}", reason));
+                tx.send(StreamEvent::ToolResult {
+                    id: id.to_string(),
+                    name: name.to_string(),
+                    result: result.clone(),
+                })
+                .ok();
+                return result;
+            }
+            if let Some(updated) = hook_resp.updated_input {
+                effective_input = updated;
+            }
+        }
+
         // Check permission
-        let decision = self.permissions.check_permission(name, input).await;
+        let decision = self.permissions.check_permission(name, &effective_input).await;
         match decision {
             PermissionDecision::Allow => {}
             PermissionDecision::Deny(reason) => {
@@ -267,9 +293,9 @@ impl QueryEngine {
             task_store: self.task_store.clone(),
         };
 
-        info!("executing tool: {} with input: {}", name, input);
+        info!("executing tool: {} with input: {}", name, &effective_input);
 
-        let result = match tool.execute(input.clone(), &ctx).await {
+        let result = match tool.execute(effective_input.clone(), &ctx).await {
             Ok(r) => r,
             Err(e) => ToolResult::error(format!("tool error: {}", e)),
         };
@@ -280,6 +306,19 @@ impl QueryEngine {
             result: result.clone(),
         })
         .ok();
+
+        // Run PostToolUse hooks (non-blocking)
+        let runner = self.hook_runner.clone();
+        let tool_name = name.to_string();
+        let tool_input = effective_input;
+        let result_json =
+            serde_json::to_string(&result.content).unwrap_or_else(|_| "[]".to_string());
+        let is_err = result.is_error;
+        tokio::spawn(async move {
+            runner
+                .run_post_tool_use(&tool_name, &tool_input, &result_json, is_err)
+                .await;
+        });
 
         result
     }

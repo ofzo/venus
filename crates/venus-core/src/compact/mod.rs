@@ -6,6 +6,8 @@ pub mod prompt;
 use anyhow::{Context, Result};
 use tracing::{debug, info, warn};
 
+use crate::hooks::events::HookEvent;
+use crate::hooks::HookRunner;
 use crate::message::{AssistantMessage, ContentBlock, Message, UserMessage};
 use groups::group_by_api_round;
 use microcompact::microcompact;
@@ -67,10 +69,30 @@ pub async fn compact(
     messages: &mut Vec<Message>,
     config: &CompactConfig,
 ) -> Result<CompactResult> {
+    compact_with_hooks(messages, config, None, "").await
+}
+
+/// Perform full compaction with optional hook support.
+pub async fn compact_with_hooks(
+    messages: &mut Vec<Message>,
+    config: &CompactConfig,
+    hook_runner: Option<&HookRunner>,
+    session_id: &str,
+) -> Result<CompactResult> {
     let messages_before = messages.len();
 
     if messages_before < 4 {
         anyhow::bail!("conversation too short to compact ({} messages)", messages_before);
+    }
+
+    // Fire PreCompact hook
+    if let Some(runner) = hook_runner {
+        runner
+            .run_simple_event(HookEvent::PreCompact {
+                session_id: session_id.to_string(),
+                message_count: messages_before,
+            })
+            .await;
     }
 
     // Step 1: Run microcompact first for lightweight cleanup
@@ -178,6 +200,17 @@ pub async fn compact(
         "compacted: {} -> {} messages, ~{} tokens saved",
         messages_before, messages_after, old_tokens
     );
+
+    // Fire PostCompact hook
+    if let Some(runner) = hook_runner {
+        runner
+            .run_simple_event(HookEvent::PostCompact {
+                session_id: session_id.to_string(),
+                messages_before,
+                messages_after,
+            })
+            .await;
+    }
 
     Ok(CompactResult {
         messages_before,

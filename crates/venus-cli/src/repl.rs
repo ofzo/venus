@@ -1,5 +1,6 @@
 use anyhow::Result;
 use venus_core::engine::QueryEngine;
+use venus_core::hooks::events::HookEvent;
 use venus_core::message::ContentBlock;
 use venus_utils::session::{self, SessionMeta};
 use std::io::{self, BufRead, Write};
@@ -9,6 +10,16 @@ use crate::render;
 
 pub async fn run_repl(engine: &mut QueryEngine) -> Result<()> {
     let stdin = io::stdin();
+
+    // Fire SessionStart hook
+    engine
+        .hook_runner
+        .run_simple_event(HookEvent::SessionStart {
+            session_id: engine.session_id.clone(),
+            cwd: engine.working_dir.display().to_string(),
+            model: engine.model.clone(),
+        })
+        .await;
 
     loop {
         // Print prompt
@@ -50,6 +61,14 @@ pub async fn run_repl(engine: &mut QueryEngine) -> Result<()> {
         }
     }
 
+    // Fire Stop hook
+    engine
+        .hook_runner
+        .run_simple_event(HookEvent::Stop {
+            session_id: engine.session_id.clone(),
+        })
+        .await;
+
     Ok(())
 }
 
@@ -58,7 +77,29 @@ pub async fn run_single_prompt(engine: &mut QueryEngine, prompt: &str) -> Result
 }
 
 async fn submit_and_render(engine: &mut QueryEngine, input: &str) -> Result<()> {
-    let content = vec![ContentBlock::text(input)];
+    // Run UserPromptSubmit hooks
+    let effective_input;
+    if let Ok(resp) = engine.hook_runner.run_user_prompt_submit(input).await {
+        if resp.deny == Some(true) {
+            let reason = resp.reason.unwrap_or_default();
+            eprintln!(
+                "  \x1b[33mBlocked by hook: {}\x1b[0m",
+                if reason.is_empty() {
+                    "denied"
+                } else {
+                    &reason
+                }
+            );
+            return Ok(());
+        }
+        effective_input = resp
+            .updated_prompt
+            .unwrap_or_else(|| input.to_string());
+    } else {
+        effective_input = input.to_string();
+    }
+
+    let content = vec![ContentBlock::text(&effective_input)];
 
     // submit_message runs the full query-tool loop and buffers events in the channel
     let mut rx = engine.submit_message(content).await?;

@@ -1,5 +1,6 @@
 pub mod compact;
 pub mod engine;
+pub mod hooks;
 pub mod message;
 pub mod stream;
 pub mod task;

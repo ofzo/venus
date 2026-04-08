@@ -289,7 +289,14 @@ async fn handle_compact(engine: &mut QueryEngine) {
         &engine.base_url,
     );
 
-    match venus_core::compact::compact(&mut engine.messages, &config).await {
+    match venus_core::compact::compact_with_hooks(
+        &mut engine.messages,
+        &config,
+        Some(&engine.hook_runner),
+        &engine.session_id,
+    )
+    .await
+    {
         Ok(result) => {
             eprintln!(
                 "  Compacted: {} -> {} messages (~{} tokens saved)\n",

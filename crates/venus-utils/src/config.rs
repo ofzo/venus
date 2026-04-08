@@ -1,5 +1,6 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use tracing::debug;
 
@@ -24,6 +25,46 @@ pub struct Settings {
     pub always_allow: Option<Vec<PermissionRule>>,
     #[serde(default)]
     pub always_deny: Option<Vec<PermissionRule>>,
+    #[serde(default)]
+    pub hooks: Option<HookConfig>,
+}
+
+/// Hook configuration: maps event names to lists of hook entries.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HookConfig {
+    #[serde(flatten)]
+    pub entries: HashMap<String, Vec<HookEntry>>,
+}
+
+/// A single hook entry with an optional matcher and a list of hooks to execute.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HookEntry {
+    /// Tool name pattern for tool events (pipe-separated: "Edit|Write|Bash").
+    /// Ignored for non-tool events.
+    #[serde(default)]
+    pub matcher: Option<String>,
+    /// The hook definitions to execute.
+    #[serde(default)]
+    pub hooks: Vec<CommandHook>,
+}
+
+/// A shell command to execute as a hook.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandHook {
+    /// Hook type (currently only "command").
+    #[serde(default, rename = "type")]
+    pub hook_type: Option<String>,
+    /// Shell command string (executed via `sh -c`).
+    pub command: String,
+    /// Timeout in seconds (default: 10).
+    #[serde(default = "default_hook_timeout")]
+    pub timeout: u64,
+}
+
+fn default_hook_timeout() -> u64 {
+    10
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,6 +127,9 @@ impl Settings {
         }
         if other.always_deny.is_some() {
             self.always_deny = other.always_deny;
+        }
+        if other.hooks.is_some() {
+            self.hooks = other.hooks;
         }
     }
 
