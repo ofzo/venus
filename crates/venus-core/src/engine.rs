@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -41,6 +42,8 @@ pub struct QueryEngine {
     pub auto_compact_failures: u32,
     /// Hook runner for lifecycle event hooks.
     pub hook_runner: Arc<HookRunner>,
+    /// Whether the engine is currently in plan mode.
+    pub plan_mode: Arc<AtomicBool>,
 }
 
 impl QueryEngine {
@@ -82,6 +85,7 @@ impl QueryEngine {
             created_at: chrono::Utc::now().timestamp() as u64,
             auto_compact_failures: 0,
             hook_runner,
+            plan_mode: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -315,6 +319,7 @@ impl QueryEngine {
             permission_handler: self.permissions.clone(),
             settings: self.settings.clone(),
             task_store: self.task_store.clone(),
+            plan_mode: self.plan_mode.clone(),
         };
 
         info!("executing tool: {} with input: {}", name, &effective_input);

@@ -2,6 +2,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
@@ -57,6 +58,7 @@ pub struct ToolContext {
     pub permission_handler: Arc<dyn PermissionHandler>,
     pub settings: Arc<Settings>,
     pub task_store: Arc<TaskStore>,
+    pub plan_mode: Arc<AtomicBool>,
 }
 
 /// The core Tool trait that all tools implement.

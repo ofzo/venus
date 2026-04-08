@@ -17,3 +17,4 @@ globset.workspace = true
 walkdir.workspace = true
 ignore.workspace = true
 reqwest.workspace = true
+uuid.workspace = true
