@@ -28,6 +28,10 @@ impl Tool for BashTool {
                 "timeout": {
                     "type": "number",
                     "description": "Optional timeout in milliseconds (max 600000)"
+                },
+                "run_in_background": {
+                    "type": "boolean",
+                    "description": "Whether to run in background (default: false)"
                 }
             },
             "required": ["command"]
@@ -40,10 +44,78 @@ impl Tool for BashTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("missing 'command' parameter"))?;
 
+        let run_in_background = input
+            .get("run_in_background")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
         let timeout_ms = input
             .get("timeout")
             .and_then(|v| v.as_u64())
             .unwrap_or(120_000);
+
+        if run_in_background {
+            let runtime = ctx.background_runtime.clone();
+            let command = command.to_string();
+            let working_dir = ctx.working_dir.clone();
+            let timeout = std::time::Duration::from_millis(timeout_ms.min(600_000));
+            let task_id = runtime
+                .spawn(format!("$ {}", &command), async move {
+                    let mut child = Command::new("bash")
+                        .arg("-c")
+                        .arg(&command)
+                        .current_dir(&working_dir)
+                        .stdout(std::process::Stdio::piped())
+                        .stderr(std::process::Stdio::piped())
+                        .spawn()
+                        .map_err(|e| format!("failed to spawn: {}", e))?;
+
+                    let result = tokio::time::timeout(timeout, async {
+                        let mut stdout = String::new();
+                        let mut stderr = String::new();
+                        if let Some(mut out) = child.stdout.take() {
+                            out.read_to_string(&mut stdout).await.ok();
+                        }
+                        if let Some(mut err) = child.stderr.take() {
+                            err.read_to_string(&mut stderr).await.ok();
+                        }
+                        let status = child.wait().await.map_err(|e| e.to_string())?;
+                        Ok::<_, String>((stdout, stderr, status))
+                    })
+                    .await;
+
+                    match result {
+                        Ok(Ok((stdout, stderr, status))) => {
+                            let mut output = stdout;
+                            if !stderr.is_empty() {
+                                if !output.is_empty() {
+                                    output.push('\n');
+                                }
+                                output.push_str(&stderr);
+                            }
+                            if output.len() > 100_000 {
+                                output.truncate(100_000);
+                                output.push_str("\n... (output truncated)");
+                            }
+                            if status.success() {
+                                Ok(output)
+                            } else {
+                                Err(format!("{}\nexit code: {}", output, status.code().unwrap_or(-1)))
+                            }
+                        }
+                        Ok(Err(e)) => Err(format!("failed to run command: {}", e)),
+                        Err(_) => {
+                            child.kill().await.ok();
+                            Err(format!("command timed out after {}ms", timeout_ms))
+                        }
+                    }
+                })
+                .await;
+            return Ok(ToolResult::text(format!(
+                "Background task started: {}. Use TaskOutput to check results.",
+                task_id
+            )));
+        }
 
         let timeout = std::time::Duration::from_millis(timeout_ms.min(600_000));
 

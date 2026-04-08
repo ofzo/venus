@@ -1,3 +1,4 @@
+pub mod background;
 pub mod compact;
 pub mod engine;
 pub mod hooks;

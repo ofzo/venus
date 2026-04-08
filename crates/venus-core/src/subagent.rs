@@ -4,6 +4,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use tracing::{debug, info};
 
+use crate::background::BackgroundTaskRuntime;
 use crate::engine::QueryEngine;
 use crate::hooks::HookRunner;
 use crate::message::ContentBlock;
@@ -25,6 +26,7 @@ pub struct SubAgentConfig {
     pub tools: Arc<ToolRegistry>,
     pub permissions: Arc<dyn PermissionHandler>,
     pub task_store: Arc<TaskStore>,
+    pub background_runtime: Arc<BackgroundTaskRuntime>,
     pub hook_runner: Arc<HookRunner>,
 }
 
@@ -67,6 +69,7 @@ impl SubAgent {
             config.permissions,
             config.working_dir,
             config.task_store,
+            config.background_runtime,
             config.hook_runner,
         );
 

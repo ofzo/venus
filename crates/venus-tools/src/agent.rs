@@ -63,8 +63,7 @@ impl Tool for AgentTool {
             .and_then(|v| v.as_str())
             .unwrap_or("sub-agent task");
 
-        // run_in_background is parsed but not yet implemented (future enhancement)
-        let _run_in_background = input
+        let run_in_background = input
             .get("run_in_background")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
@@ -73,6 +72,37 @@ impl Tool for AgentTool {
             .get("model")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+
+        if run_in_background {
+            let runtime = ctx.background_runtime.clone();
+            let config = SubAgentConfig {
+                prompt: prompt.to_string(),
+                description: description.to_string(),
+                model: model_override,
+                working_dir: ctx.working_dir.clone(),
+                auth_header: ctx.auth_header,
+                auth_value: ctx.auth_value.clone(),
+                base_url: ctx.base_url.clone(),
+                settings: ctx.settings.clone(),
+                tools: ctx.tools.clone(),
+                permissions: ctx.permission_handler.clone(),
+                task_store: ctx.task_store.clone(),
+                background_runtime: ctx.background_runtime.clone(),
+                hook_runner: ctx.hook_runner.clone(),
+            };
+            let task_id = runtime
+                .spawn(description.to_string(), async move {
+                    match SubAgent::run(config).await {
+                        Ok(result) => Ok(result.output),
+                        Err(e) => Err(e.to_string()),
+                    }
+                })
+                .await;
+            return Ok(ToolResult::text(format!(
+                "Background agent started: {}. Use TaskOutput to check results.",
+                task_id
+            )));
+        }
 
         let config = SubAgentConfig {
             prompt: prompt.to_string(),
@@ -86,6 +116,7 @@ impl Tool for AgentTool {
             tools: ctx.tools.clone(),
             permissions: ctx.permission_handler.clone(),
             task_store: ctx.task_store.clone(),
+            background_runtime: ctx.background_runtime.clone(),
             hook_runner: ctx.hook_runner.clone(),
         };
 

@@ -15,6 +15,8 @@ pub mod skill;
 pub mod task_create;
 pub mod task_get;
 pub mod task_list;
+pub mod task_output;
+pub mod task_stop;
 pub mod task_update;
 pub mod web_fetch;
 pub mod web_search;
@@ -46,5 +48,7 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         Box::new(memory_write::MemoryWriteTool),
         Box::new(memory_read::MemoryReadTool),
         Box::new(memory_forget::MemoryForgetTool),
+        Box::new(task_output::TaskOutputTool),
+        Box::new(task_stop::TaskStopTool),
     ]
 }

@@ -6,6 +6,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
+use crate::background::BackgroundTaskRuntime;
 use crate::message::ContentBlock;
 use crate::task::TaskStore;
 use venus_utils::config::Settings;
@@ -58,6 +59,7 @@ pub struct ToolContext {
     pub permission_handler: Arc<dyn PermissionHandler>,
     pub settings: Arc<Settings>,
     pub task_store: Arc<TaskStore>,
+    pub background_runtime: Arc<BackgroundTaskRuntime>,
     pub plan_mode: Arc<AtomicBool>,
     // Fields needed for sub-agent spawning
     pub auth_header: &'static str,

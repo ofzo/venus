@@ -9,6 +9,7 @@ use clap::Parser;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use venus_core::background::BackgroundTaskRuntime;
 use venus_core::engine::QueryEngine;
 use venus_core::hooks::HookRunner;
 use venus_core::skill::SkillRegistry;
@@ -119,6 +120,7 @@ async fn main() -> Result<()> {
 
     let tools = Arc::new(ToolRegistry::new(all_tool_list));
     let task_store = Arc::new(TaskStore::new());
+    let background_runtime = Arc::new(BackgroundTaskRuntime::new());
     let hook_runner = Arc::new(HookRunner::new(
         settings.hooks.clone(),
         String::new(),
@@ -126,7 +128,7 @@ async fn main() -> Result<()> {
     ));
 
     let mut engine =
-        QueryEngine::new(settings.clone(), tools, permissions, working_dir.clone(), task_store, hook_runner).await?;
+        QueryEngine::new(settings.clone(), tools, permissions, working_dir.clone(), task_store, background_runtime, hook_runner).await?;
 
     // Resume session if requested
     if let Some(resume_id) = cli.resume {

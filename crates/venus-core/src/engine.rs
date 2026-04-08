@@ -7,6 +7,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
 use venus_utils::cost::TokenUsage;
 
+use crate::background::BackgroundTaskRuntime;
 use venus_utils::claudemd;
 use venus_utils::config::Settings;
 use venus_utils::context_window;
@@ -38,6 +39,7 @@ pub struct QueryEngine {
     pub working_dir: PathBuf,
     pub system_prompt: String,
     pub task_store: Arc<TaskStore>,
+    pub background_runtime: Arc<BackgroundTaskRuntime>,
     pub created_at: u64,
     /// Counter for consecutive auto-compact failures (circuit breaker).
     pub auto_compact_failures: u32,
@@ -54,6 +56,7 @@ impl QueryEngine {
         permissions: Arc<dyn PermissionHandler>,
         working_dir: PathBuf,
         task_store: Arc<TaskStore>,
+        background_runtime: Arc<BackgroundTaskRuntime>,
         hook_runner: Arc<HookRunner>,
     ) -> Result<Self> {
         let (auth_header, auth_value) = settings
@@ -83,6 +86,7 @@ impl QueryEngine {
             working_dir,
             system_prompt,
             task_store,
+            background_runtime,
             created_at: chrono::Utc::now().timestamp() as u64,
             auto_compact_failures: 0,
             hook_runner,
@@ -104,6 +108,7 @@ impl QueryEngine {
         permissions: Arc<dyn PermissionHandler>,
         working_dir: PathBuf,
         task_store: Arc<TaskStore>,
+        background_runtime: Arc<BackgroundTaskRuntime>,
         hook_runner: Arc<HookRunner>,
     ) -> Self {
         Self {
@@ -122,6 +127,7 @@ impl QueryEngine {
             working_dir,
             system_prompt,
             task_store,
+            background_runtime,
             created_at: chrono::Utc::now().timestamp() as u64,
             auto_compact_failures: 0,
             hook_runner,
@@ -319,6 +325,7 @@ impl QueryEngine {
             permission_handler: self.permissions.clone(),
             settings: self.settings.clone(),
             task_store: self.task_store.clone(),
+            background_runtime: self.background_runtime.clone(),
             plan_mode: self.plan_mode.clone(),
             auth_header: self.auth_header,
             auth_value: self.auth_value.clone(),
