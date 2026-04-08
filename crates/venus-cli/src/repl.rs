@@ -31,7 +31,7 @@ pub async fn run_repl(engine: &mut QueryEngine) -> Result<()> {
 
         // Handle slash commands
         if input.starts_with('/') {
-            let should_exit = commands::handle_command(&input, engine);
+            let should_exit = commands::handle_command(&input, engine).await;
             if should_exit {
                 break;
             }
