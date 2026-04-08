@@ -5,6 +5,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
+use venus_utils::cost::TokenUsage;
 
 use venus_utils::claudemd;
 use venus_utils::config::Settings;
@@ -152,47 +153,7 @@ impl QueryEngine {
             debug!("query loop iteration {}", iteration);
 
             // Build API request
-            let api_messages = messages_to_api_params(&self.messages);
-            let tool_defs = self.tools.api_definitions();
-
-            // Build system prompt as array with cache_control
-            let system_blocks = serde_json::json!([{
-                "type": "text",
-                "text": self.system_prompt,
-                "cache_control": {"type": "ephemeral"}
-            }]);
-
-            // Add cache_control to the last tool definition
-            let mut tool_defs = tool_defs;
-            if let Some(last) = tool_defs.last_mut() {
-                if let Some(obj) = last.as_object_mut() {
-                    obj.insert("cache_control".into(), serde_json::json!({"type": "ephemeral"}));
-                }
-            }
-
-            // Add cache_control to last user messages for conversation turn caching
-            let api_messages = add_cache_control_to_messages(api_messages);
-
-            // Determine max_tokens: when thinking is enabled, use model's full max output
-            let thinking_param = self.build_thinking_param();
-            let max_tokens = if thinking_param.is_some() {
-                context_window::max_output_for_model(&self.model)
-            } else {
-                self.max_tokens
-            };
-
-            let mut request = serde_json::json!({
-                "model": self.model,
-                "max_tokens": max_tokens,
-                "system": system_blocks,
-                "messages": api_messages,
-                "tools": tool_defs,
-                "stream": true,
-            });
-
-            if let Some(thinking) = thinking_param {
-                request.as_object_mut().unwrap().insert("thinking".into(), thinking);
-            }
+            let request = self.build_api_request_body();
 
             // Make streaming API call with retry (covers both connection and mid-stream failures)
             let client = reqwest::Client::builder()
@@ -402,7 +363,6 @@ impl QueryEngine {
         response: reqwest::Response,
         tx: &mpsc::UnboundedSender<StreamEvent>,
     ) -> Result<AssistantMessage> {
-        use venus_utils::cost::TokenUsage;
         use futures_util::StreamExt;
 
         let mut parser = SseParserInline::new();
@@ -414,8 +374,29 @@ impl QueryEngine {
         let mut stop_reason: Option<String> = None;
         let mut total_usage = TokenUsage::default();
 
-        while let Some(chunk) = pinned.next().await {
-            let chunk = chunk?;
+        while let Some(chunk_result) = pinned.next().await {
+            let chunk = match chunk_result {
+                Ok(c) => c,
+                Err(e) => {
+                    // Build checkpoint from current state
+                    let checkpoint_blocks: Vec<ContentBlock> =
+                        blocks.iter().filter_map(|b| b.to_content_block()).collect();
+                    let has_content = checkpoint_blocks.iter().any(|b| {
+                        matches!(b, ContentBlock::Text { text } if !text.is_empty())
+                    });
+
+                    return Err(StreamRecoveryError {
+                        checkpoint: StreamCheckpoint {
+                            blocks: checkpoint_blocks,
+                            model: model.clone(),
+                            input_usage: total_usage.clone(),
+                            has_content,
+                        },
+                        message: e.to_string(),
+                    }
+                    .into());
+                }
+            };
             parser.buffer.push_str(&String::from_utf8_lossy(&chunk));
 
             while let Some(raw) = parser.next_raw_event() {
@@ -559,25 +540,7 @@ impl QueryEngine {
         // Build assistant message
         let content: Vec<ContentBlock> = blocks
             .iter()
-            .filter_map(|b| match b.kind {
-                BKind::Text if !b.text.is_empty() => Some(ContentBlock::Text {
-                    text: b.text.clone(),
-                }),
-                BKind::ToolUse => {
-                    let input: serde_json::Value =
-                        serde_json::from_str(&b.text).unwrap_or(serde_json::Value::Null);
-                    Some(ContentBlock::ToolUse {
-                        id: b.tool_id.clone().unwrap_or_default(),
-                        name: b.tool_name.clone().unwrap_or_default(),
-                        input,
-                    })
-                }
-                BKind::Thinking if !b.text.is_empty() => Some(ContentBlock::Thinking {
-                    thinking: b.text.clone(),
-                    signature: b.signature.clone().unwrap_or_default(),
-                }),
-                _ => None,
-            })
+            .filter_map(|b| b.to_content_block())
             .collect();
 
         let msg = AssistantMessage {
@@ -595,8 +558,11 @@ impl QueryEngine {
     }
 
     /// Send request + process stream, retrying on mid-stream failures.
+    /// When partial content has been received before a failure, attempts checkpoint
+    /// recovery by injecting the partial assistant response into the conversation
+    /// and requesting continuation.
     async fn stream_with_retry(
-        &self,
+        &mut self,
         client: &reqwest::Client,
         url: &str,
         body: &str,
@@ -605,29 +571,162 @@ impl QueryEngine {
         const STREAM_RETRIES: u32 = 2;
 
         for attempt in 0..=STREAM_RETRIES {
-            let response = self
-                .send_with_retry(client, url, body, tx)
-                .await?;
+            let response = self.send_with_retry(client, url, body, tx).await?;
 
             match self.process_sse_stream(response, tx).await {
                 Ok(msg) => return Ok(msg),
-                Err(e) if attempt < STREAM_RETRIES => {
-                    debug!(
-                        "stream interrupted, retrying (attempt {}/{}): {}",
-                        attempt + 1, STREAM_RETRIES, e
-                    );
-                    tx.send(StreamEvent::Error(
-                        "Stream interrupted, reconnecting...".to_string(),
-                    ))
-                    .ok();
-                    let delay = 1000u64 * 2u64.pow(attempt);
-                    tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                Err(e) => {
+                    // Try to extract checkpoint from error for smart recovery
+                    if let Some(recovery_err) = e.downcast_ref::<StreamRecoveryError>() {
+                        if recovery_err.checkpoint.has_content && attempt < STREAM_RETRIES {
+                            debug!(
+                                "stream interrupted with {} partial blocks, attempting recovery (attempt {}/{})",
+                                recovery_err.checkpoint.blocks.len(),
+                                attempt + 1,
+                                STREAM_RETRIES
+                            );
+                            tx.send(StreamEvent::Error(
+                                "Stream interrupted, recovering...".into(),
+                            ))
+                            .ok();
+
+                            // Clone the checkpoint before the borrow on `e` is released
+                            let checkpoint = recovery_err.checkpoint.clone();
+
+                            // Attempt recovery with checkpoint
+                            return self
+                                .recover_from_checkpoint(&checkpoint, client, url, tx)
+                                .await;
+                        }
+                    }
+
+                    // No checkpoint or no content -- retry from scratch (existing behavior)
+                    if attempt < STREAM_RETRIES {
+                        debug!(
+                            "stream failed, retrying from scratch (attempt {}/{}): {}",
+                            attempt + 1,
+                            STREAM_RETRIES,
+                            e
+                        );
+                        tx.send(StreamEvent::Error(
+                            "Stream interrupted, reconnecting...".to_string(),
+                        ))
+                        .ok();
+                        let delay = 1000u64 * 2u64.pow(attempt);
+                        tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                    } else {
+                        return Err(e).context("stream processing failed after retries");
+                    }
                 }
-                Err(e) => return Err(e).context("stream processing failed after retries"),
             }
         }
 
         Err(anyhow::anyhow!("stream retries exhausted"))
+    }
+
+    /// Recover from a mid-stream interruption by saving partial output and requesting continuation.
+    async fn recover_from_checkpoint(
+        &mut self,
+        checkpoint: &StreamCheckpoint,
+        client: &reqwest::Client,
+        url: &str,
+        tx: &mpsc::UnboundedSender<StreamEvent>,
+    ) -> Result<AssistantMessage> {
+        // Filter to only text and thinking blocks (skip incomplete tool_use)
+        let partial_content: Vec<ContentBlock> = checkpoint
+            .blocks
+            .iter()
+            .filter(|b| {
+                matches!(b, ContentBlock::Text { text } if !text.is_empty())
+                    || matches!(b, ContentBlock::Thinking { .. })
+            })
+            .cloned()
+            .collect();
+
+        if partial_content.is_empty() {
+            anyhow::bail!("no recoverable content in checkpoint");
+        }
+
+        // 1. Add partial assistant message to conversation history
+        let partial_msg = AssistantMessage {
+            uuid: uuid::Uuid::new_v4().to_string(),
+            content: partial_content,
+            timestamp: chrono::Utc::now().timestamp() as u64,
+            model: Some(checkpoint.model.clone()),
+            stop_reason: None,
+            usage: Some(checkpoint.input_usage.clone()),
+        };
+        self.messages.push(Message::Assistant(partial_msg));
+
+        // 2. Add continuation user message
+        self.messages.push(Message::User(UserMessage::new(vec![
+            ContentBlock::text(
+                "[The previous response was interrupted mid-stream. Continue exactly where you left off.]",
+            ),
+        ])));
+
+        // 3. Build a fresh API request body with the updated conversation
+        let recovery_body = self.build_api_request_body();
+        let recovery_body_str = serde_json::to_string(&recovery_body)?;
+
+        // 4. Send and process without recovery (to avoid infinite recursion)
+        let response = self
+            .send_with_retry(client, url, &recovery_body_str, tx)
+            .await?;
+        self.process_sse_stream(response, tx).await
+    }
+
+    /// Build the full API request body from the current engine state.
+    /// Extracted as a helper to allow reuse in recovery paths.
+    fn build_api_request_body(&self) -> serde_json::Value {
+        let api_messages = messages_to_api_params(&self.messages);
+        let mut tool_defs = self.tools.api_definitions();
+
+        // Build system prompt as array with cache_control
+        let system_blocks = serde_json::json!([{
+            "type": "text",
+            "text": self.system_prompt,
+            "cache_control": {"type": "ephemeral"}
+        }]);
+
+        // Add cache_control to the last tool definition
+        if let Some(last) = tool_defs.last_mut() {
+            if let Some(obj) = last.as_object_mut() {
+                obj.insert(
+                    "cache_control".into(),
+                    serde_json::json!({"type": "ephemeral"}),
+                );
+            }
+        }
+
+        // Add cache_control to last user messages for conversation turn caching
+        let api_messages = add_cache_control_to_messages(api_messages);
+
+        // Determine max_tokens: when thinking is enabled, use model's full max output
+        let thinking_param = self.build_thinking_param();
+        let max_tokens = if thinking_param.is_some() {
+            context_window::max_output_for_model(&self.model)
+        } else {
+            self.max_tokens
+        };
+
+        let mut request = serde_json::json!({
+            "model": self.model,
+            "max_tokens": max_tokens,
+            "system": system_blocks,
+            "messages": api_messages,
+            "tools": tool_defs,
+            "stream": true,
+        });
+
+        if let Some(thinking) = thinking_param {
+            request
+                .as_object_mut()
+                .unwrap()
+                .insert("thinking".into(), thinking);
+        }
+
+        request
     }
 
     /// Send an API request with exponential backoff retry for rate limits and server errors.
@@ -857,3 +956,57 @@ struct BlockBuilder {
     tool_name: Option<String>,
     signature: Option<String>,
 }
+
+impl BlockBuilder {
+    /// Convert this builder into a ContentBlock, if it has meaningful content.
+    fn to_content_block(&self) -> Option<ContentBlock> {
+        match self.kind {
+            BKind::Text if !self.text.is_empty() => Some(ContentBlock::Text {
+                text: self.text.clone(),
+            }),
+            BKind::ToolUse => {
+                let input: serde_json::Value =
+                    serde_json::from_str(&self.text).unwrap_or(serde_json::Value::Null);
+                Some(ContentBlock::ToolUse {
+                    id: self.tool_id.clone().unwrap_or_default(),
+                    name: self.tool_name.clone().unwrap_or_default(),
+                    input,
+                })
+            }
+            BKind::Thinking if !self.text.is_empty() => Some(ContentBlock::Thinking {
+                thinking: self.text.clone(),
+                signature: self.signature.clone().unwrap_or_default(),
+            }),
+            _ => None,
+        }
+    }
+}
+
+/// Checkpoint state for stream recovery. Captures accumulated content
+/// so that a mid-stream failure can be recovered without losing partial output.
+#[derive(Debug, Clone, Default)]
+struct StreamCheckpoint {
+    /// Content blocks accumulated before the interruption.
+    blocks: Vec<ContentBlock>,
+    /// Model name from message_start event.
+    model: String,
+    /// Input token usage from message_start (for cost tracking).
+    input_usage: TokenUsage,
+    /// True if at least one non-empty content block was accumulated.
+    has_content: bool,
+}
+
+/// Error type for stream interruptions that carries a recovery checkpoint.
+#[derive(Debug)]
+struct StreamRecoveryError {
+    checkpoint: StreamCheckpoint,
+    message: String,
+}
+
+impl std::fmt::Display for StreamRecoveryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "stream interrupted: {}", self.message)
+    }
+}
+
+impl std::error::Error for StreamRecoveryError {}
