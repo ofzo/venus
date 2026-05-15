@@ -140,6 +140,28 @@ async fn main() -> Result<()> {
         None
     };
 
+    // Load plugins from ~/.claude/plugins/ and <project>/.claude/plugins/
+    let plugin_dirs = vec![
+        dirs::home_dir()
+            .unwrap_or_default()
+            .join(".claude")
+            .join("plugins"),
+        working_dir.join(".claude").join("plugins"),
+    ];
+    let mut plugin_registry = venus_core::plugin_registry::PluginRegistry::new();
+    if let Err(e) = plugin_registry.load_all(&plugin_dirs).await {
+        eprintln!("Warning: failed to load plugins: {}", e);
+    }
+    // Add plugin tools to the tool list
+    for plugin in plugin_registry.all_plugins() {
+        for tool_def in &plugin.manifest.tools {
+            all_tool_list.push(Box::new(venus_tools::plugin_tool::PluginTool {
+                tool_def: tool_def.clone(),
+                base_dir: plugin.base_dir.clone(),
+            }));
+        }
+    }
+
     let tools = Arc::new(ToolRegistry::new(all_tool_list));
     let task_store = Arc::new(TaskStore::new());
     let background_runtime = Arc::new(BackgroundTaskRuntime::new());

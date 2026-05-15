@@ -121,6 +121,13 @@ pub async fn handle_command(
             }
             CommandResult::Continue
         }
+        "/plugin" | "/plugins" => {
+            eprintln!("\n  \x1b[1mInstalled plugins:\x1b[0m");
+            // Plugin info would be passed in from the registry
+            eprintln!("    (Plugin listing requires plugin registry to be passed to command handler)");
+            eprintln!("    Check ~/.claude/plugins/ and .claude/plugins/ for installed plugins.\n");
+            CommandResult::Continue
+        }
         "/resume" => {
             let rt = tokio::runtime::Handle::current();
             let arg = parts.get(1).map(|s| s.trim().to_string());
