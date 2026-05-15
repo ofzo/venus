@@ -70,6 +70,14 @@ impl ContentBlock {
             is_error,
         }
     }
+
+    /// Get the text content if this is a Text block.
+    pub fn as_text(&self) -> Option<&str> {
+        match self {
+            ContentBlock::Text { text } => Some(text),
+            _ => None,
+        }
+    }
 }
 
 impl UserMessage {

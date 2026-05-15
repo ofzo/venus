@@ -8,6 +8,7 @@ tempfile = "3"
 tokio-util.workspace = true
 
 [dependencies]
+tempfile = "3"
 venus-core = { path = "../venus-core" }
 venus-utils = { path = "../venus-utils" }
 serde.workspace = true
