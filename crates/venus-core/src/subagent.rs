@@ -119,3 +119,73 @@ fn extract_final_response(messages: &[crate::message::Message]) -> String {
     }
     String::from("(sub-agent produced no text output)")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::message::{AssistantMessage, Message, UserMessage};
+
+    fn make_assistant_msg(texts: &[&str]) -> Message {
+        let content: Vec<ContentBlock> = texts.iter().map(|t| ContentBlock::text(*t)).collect();
+        Message::Assistant(AssistantMessage::new(content))
+    }
+
+    fn make_user_msg(text: &str) -> Message {
+        Message::User(UserMessage::new(vec![ContentBlock::text(text)]))
+    }
+
+    #[test]
+    fn test_extract_from_last_assistant() {
+        let messages = vec![
+            make_user_msg("question"),
+            make_assistant_msg(&["answer"]),
+        ];
+        assert_eq!(extract_final_response(&messages), "answer");
+    }
+
+    #[test]
+    fn test_extract_multiple_text_blocks() {
+        let messages = vec![make_assistant_msg(&["part1", "part2"])];
+        assert_eq!(extract_final_response(&messages), "part1\npart2");
+    }
+
+    #[test]
+    fn test_extract_skips_user_messages() {
+        let messages = vec![
+            make_user_msg("first"),
+            make_assistant_msg(&["ignored"]),
+            make_user_msg("second"),
+        ];
+        // No assistant message at the end, so should return fallback
+        // Wait - it walks backwards, so it finds the assistant message
+        assert_eq!(extract_final_response(&messages), "ignored");
+    }
+
+    #[test]
+    fn test_extract_empty_messages() {
+        let messages = vec![];
+        assert_eq!(
+            extract_final_response(&messages),
+            "(sub-agent produced no text output)"
+        );
+    }
+
+    #[test]
+    fn test_extract_no_assistant_messages() {
+        let messages = vec![make_user_msg("hello"), make_user_msg("world")];
+        assert_eq!(
+            extract_final_response(&messages),
+            "(sub-agent produced no text output)"
+        );
+    }
+
+    #[test]
+    fn test_extract_last_assistant_ignores_earlier() {
+        let messages = vec![
+            make_assistant_msg(&["first answer"]),
+            make_user_msg("follow up"),
+            make_assistant_msg(&["second answer"]),
+        ];
+        assert_eq!(extract_final_response(&messages), "second answer");
+    }
+}

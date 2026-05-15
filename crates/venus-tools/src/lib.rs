@@ -14,6 +14,7 @@ pub mod memory_forget;
 pub mod memory_read;
 pub mod memory_write;
 pub mod plan;
+pub mod plugin_tool;
 pub mod skill;
 pub mod task_create;
 pub mod task_get;

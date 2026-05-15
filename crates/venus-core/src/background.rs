@@ -129,3 +129,109 @@ impl BackgroundTaskRuntime {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_spawn_and_complete() {
+        let runtime = BackgroundTaskRuntime::new();
+        let id = runtime
+            .spawn("test task".to_string(), async { Ok("output".to_string()) })
+            .await;
+
+        assert!(id.starts_with("bg_"));
+
+        // Wait a bit for the task to complete
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let (info, output) = runtime.read_output(&id).await.unwrap();
+        assert_eq!(info.status, BackgroundTaskStatus::Completed);
+        assert_eq!(output, "output");
+    }
+
+    #[tokio::test]
+    async fn test_spawn_and_fail() {
+        let runtime = BackgroundTaskRuntime::new();
+        let id = runtime
+            .spawn("failing task".to_string(), async {
+                Err("something went wrong".to_string())
+            })
+            .await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let (info, output) = runtime.read_output(&id).await.unwrap();
+        assert_eq!(
+            info.status,
+            BackgroundTaskStatus::Failed("something went wrong".to_string())
+        );
+        assert_eq!(output, "something went wrong");
+    }
+
+    #[tokio::test]
+    async fn test_cancel_running_task() {
+        let runtime = BackgroundTaskRuntime::new();
+        let id = runtime
+            .spawn("long task".to_string(), async {
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                Ok("done".to_string())
+            })
+            .await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        let cancelled = runtime.cancel(&id).await.unwrap();
+        assert!(cancelled);
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let (info, _) = runtime.read_output(&id).await.unwrap();
+        assert_eq!(info.status, BackgroundTaskStatus::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn test_cancel_nonexistent() {
+        let runtime = BackgroundTaskRuntime::new();
+        let result = runtime.cancel("bg_999").await.unwrap();
+        assert!(!result);
+    }
+
+    #[tokio::test]
+    async fn test_read_output_nonexistent() {
+        let runtime = BackgroundTaskRuntime::new();
+        let result = runtime.read_output("bg_999").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_list_tasks() {
+        let runtime = BackgroundTaskRuntime::new();
+        runtime
+            .spawn("task 1".to_string(), async { Ok("a".to_string()) })
+            .await;
+        runtime
+            .spawn("task 2".to_string(), async { Ok("b".to_string()) })
+            .await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let tasks = runtime.list().await;
+        assert_eq!(tasks.len(), 2);
+        assert!(tasks.iter().all(|t| t.status == BackgroundTaskStatus::Completed));
+    }
+
+    #[tokio::test]
+    async fn test_task_ids_are_sequential() {
+        let runtime = BackgroundTaskRuntime::new();
+        let id1 = runtime
+            .spawn("a".to_string(), async { Ok("".to_string()) })
+            .await;
+        let id2 = runtime
+            .spawn("b".to_string(), async { Ok("".to_string()) })
+            .await;
+        assert_eq!(id1, "bg_1");
+        assert_eq!(id2, "bg_2");
+    }
+}

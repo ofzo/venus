@@ -5,6 +5,8 @@ pub mod engine;
 pub mod hooks;
 pub mod lsp;
 pub mod message;
+pub mod plugin;
+pub mod plugin_registry;
 pub mod skill;
 pub mod stream;
 pub mod subagent;

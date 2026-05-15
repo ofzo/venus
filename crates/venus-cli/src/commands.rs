@@ -83,6 +83,10 @@ pub async fn handle_command(
             handle_tokens(engine);
             CommandResult::Continue
         }
+        "/plugin" | "/plugins" => {
+            handle_plugins().await;
+            CommandResult::Continue
+        }
         "/sessions" => {
             let rt = tokio::runtime::Handle::current();
             let result = std::thread::spawn(move || rt.block_on(session::list_sessions()))
@@ -510,6 +514,62 @@ fn dirs_path(filename: &str) -> Option<std::path::PathBuf> {
     dirs::home_dir().map(|h| h.join(".claude").join(filename))
 }
 
+/// List installed plugins from standard directories.
+async fn handle_plugins() {
+    let plugin_dirs = vec![
+        dirs::home_dir()
+            .unwrap_or_default()
+            .join(".claude")
+            .join("plugins"),
+        std::env::current_dir()
+            .unwrap_or_default()
+            .join(".claude")
+            .join("plugins"),
+    ];
+
+    let mut registry = venus_core::plugin_registry::PluginRegistry::new();
+    if let Err(e) = registry.load_all(&plugin_dirs).await {
+        eprintln!("  Error loading plugins: {}\n", e);
+        return;
+    }
+
+    let plugins = registry.all_plugins();
+    if plugins.is_empty() {
+        eprintln!(
+            "\n  No plugins installed.\n\n  Place plugins in ~/.claude/plugins/ or ./.claude/plugins/.\n  Each plugin directory must contain a plugin.json manifest.\n"
+        );
+        return;
+    }
+
+    eprintln!("\n  \x1b[1mInstalled plugins:\x1b[0m");
+    for plugin in plugins {
+        let desc = plugin
+            .manifest
+            .description
+            .as_deref()
+            .unwrap_or("(no description)");
+        eprintln!(
+            "    \x1b[33m{}\x1b[0m v{} - {}",
+            plugin.manifest.name, plugin.manifest.version, desc
+        );
+        if !plugin.manifest.tools.is_empty() {
+            let tool_names: Vec<&str> =
+                plugin.manifest.tools.iter().map(|t| t.name.as_str()).collect();
+            eprintln!("      Tools: {}", tool_names.join(", "));
+        }
+        if !plugin.manifest.mcp_servers.is_empty() {
+            let server_names: Vec<&str> = plugin.manifest.mcp_servers.keys().map(|s| s.as_str()).collect();
+            eprintln!("      MCP servers: {}", server_names.join(", "));
+        }
+        if !plugin.manifest.commands.is_empty() {
+            let cmd_names: Vec<&str> =
+                plugin.manifest.commands.iter().map(|c| c.name.as_str()).collect();
+            eprintln!("      Commands: {}", cmd_names.join(", "));
+        }
+    }
+    eprintln!();
+}
+
 fn print_help() {
     eprintln!(
         r#"
@@ -526,6 +586,7 @@ fn print_help() {
     /doctor         Run environment diagnostics
     /context        Show context info
     /tokens         Show detailed token breakdown
+    /plugin         List installed plugins
     /sessions       List all saved sessions
     /resume [n|id]  Resume a previous session
 

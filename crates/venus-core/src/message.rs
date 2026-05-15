@@ -170,3 +170,165 @@ fn content_blocks_to_api(blocks: &[ContentBlock]) -> serde_json::Value {
 
     serde_json::Value::Array(api_blocks)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_content_block_text() {
+        let block = ContentBlock::text("hello");
+        match block {
+            ContentBlock::Text { text } => assert_eq!(text, "hello"),
+            _ => panic!("expected Text"),
+        }
+    }
+
+    #[test]
+    fn test_content_block_tool_result() {
+        let block = ContentBlock::tool_result(
+            "tool_1".to_string(),
+            vec![ContentBlock::text("result")],
+            false,
+        );
+        match block {
+            ContentBlock::ToolResult {
+                tool_use_id,
+                content,
+                is_error,
+            } => {
+                assert_eq!(tool_use_id, "tool_1");
+                assert_eq!(content.len(), 1);
+                assert!(!is_error);
+            }
+            _ => panic!("expected ToolResult"),
+        }
+    }
+
+    #[test]
+    fn test_user_message_new() {
+        let msg = UserMessage::new(vec![ContentBlock::text("test")]);
+        assert!(!msg.uuid.is_empty());
+        assert_eq!(msg.content.len(), 1);
+        assert!(msg.timestamp > 0);
+    }
+
+    #[test]
+    fn test_assistant_message_new() {
+        let msg = AssistantMessage::new(vec![ContentBlock::text("response")]);
+        assert!(!msg.uuid.is_empty());
+        assert_eq!(msg.content.len(), 1);
+        assert!(msg.model.is_none());
+        assert!(msg.stop_reason.is_none());
+    }
+
+    #[test]
+    fn test_message_timestamp() {
+        let user = Message::User(UserMessage::new(vec![ContentBlock::text("hi")]));
+        assert!(user.timestamp().is_some());
+
+        let system = Message::System(SystemMessage {
+            content: "sys".to_string(),
+        });
+        assert!(system.timestamp().is_none());
+    }
+
+    #[test]
+    fn test_message_is_tool_result() {
+        let tool_result = Message::User(UserMessage {
+            uuid: "test".to_string(),
+            content: vec![ContentBlock::tool_result(
+                "id1".to_string(),
+                vec![ContentBlock::text("out")],
+                false,
+            )],
+            timestamp: 0,
+        });
+        assert!(tool_result.is_tool_result());
+
+        let text_msg = Message::User(UserMessage {
+            uuid: "test".to_string(),
+            content: vec![ContentBlock::text("hello")],
+            timestamp: 0,
+        });
+        assert!(!text_msg.is_tool_result());
+
+        let assistant = Message::Assistant(AssistantMessage::new(vec![ContentBlock::text("hi")]));
+        assert!(!assistant.is_tool_result());
+    }
+
+    #[test]
+    fn test_messages_to_api_params_filters_system() {
+        let messages = vec![
+            Message::System(SystemMessage {
+                content: "sys".to_string(),
+            }),
+            Message::User(UserMessage {
+                uuid: "u1".to_string(),
+                content: vec![ContentBlock::text("hello")],
+                timestamp: 0,
+            }),
+            Message::Assistant(AssistantMessage {
+                uuid: "a1".to_string(),
+                content: vec![ContentBlock::text("world")],
+                timestamp: 0,
+                model: None,
+                stop_reason: None,
+                usage: None,
+            }),
+        ];
+        let params = messages_to_api_params(&messages);
+        assert_eq!(params.len(), 2);
+        assert_eq!(params[0]["role"], "user");
+        assert_eq!(params[1]["role"], "assistant");
+    }
+
+    #[test]
+    fn test_content_blocks_to_api_text() {
+        let blocks = vec![ContentBlock::text("hello")];
+        let api = content_blocks_to_api(&blocks);
+        assert_eq!(api[0]["type"], "text");
+        assert_eq!(api[0]["text"], "hello");
+    }
+
+    #[test]
+    fn test_content_blocks_to_api_tool_use() {
+        let blocks = vec![ContentBlock::ToolUse {
+            id: "tu_1".to_string(),
+            name: "Bash".to_string(),
+            input: serde_json::json!({"command": "ls"}),
+        }];
+        let api = content_blocks_to_api(&blocks);
+        assert_eq!(api[0]["type"], "tool_use");
+        assert_eq!(api[0]["name"], "Bash");
+    }
+
+    #[test]
+    fn test_content_blocks_to_api_thinking() {
+        let blocks = vec![ContentBlock::Thinking {
+            thinking: "reasoning".to_string(),
+            signature: "sig".to_string(),
+        }];
+        let api = content_blocks_to_api(&blocks);
+        assert_eq!(api[0]["type"], "thinking");
+        assert_eq!(api[0]["thinking"], "reasoning");
+    }
+
+    #[test]
+    fn test_message_serialization_roundtrip() {
+        let msg = Message::User(UserMessage {
+            uuid: "test-uuid".to_string(),
+            content: vec![ContentBlock::text("hello world")],
+            timestamp: 1234567890,
+        });
+        let json = serde_json::to_string(&msg).unwrap();
+        let deserialized: Message = serde_json::from_str(&json).unwrap();
+        match deserialized {
+            Message::User(u) => {
+                assert_eq!(u.uuid, "test-uuid");
+                assert_eq!(u.timestamp, 1234567890);
+            }
+            _ => panic!("expected User message"),
+        }
+    }
+}

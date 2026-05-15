@@ -3,6 +3,10 @@ name = "venus-tools"
 version.workspace = true
 edition.workspace = true
 
+[dev-dependencies]
+tempfile = "3"
+tokio-util.workspace = true
+
 [dependencies]
 venus-core = { path = "../venus-core" }
 venus-utils = { path = "../venus-utils" }

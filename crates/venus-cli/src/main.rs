@@ -98,6 +98,28 @@ async fn main() -> Result<()> {
         skill_registry.clone(),
     )));
 
+    // Load plugins
+    let plugin_dirs = vec![
+        dirs::home_dir()
+            .unwrap_or_default()
+            .join(".claude")
+            .join("plugins"),
+        working_dir.join(".claude").join("plugins"),
+    ];
+    let mut plugin_registry = venus_core::plugin_registry::PluginRegistry::new();
+    if let Err(e) = plugin_registry.load_all(&plugin_dirs).await {
+        eprintln!("Warning: failed to load plugins: {}", e);
+    }
+    // Add plugin tools
+    for plugin in plugin_registry.all_plugins() {
+        for tool_def in &plugin.manifest.tools {
+            all_tool_list.push(Box::new(venus_tools::plugin_tool::PluginTool {
+                tool_def: tool_def.clone(),
+                base_dir: plugin.base_dir.clone(),
+            }));
+        }
+    }
+
     // Add MCP tools if configured
     let _mcp_manager = if let Some(ref mcp_configs) = settings.mcp_servers {
         if !mcp_configs.is_empty() {
