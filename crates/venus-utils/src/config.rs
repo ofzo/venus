@@ -77,8 +77,8 @@ pub struct ProviderConfig {
     #[serde(rename = "type")]
     pub provider_type: String,
 
-    /// API key for this provider.
-    #[serde(default)]
+    /// API key for this provider (also accepts "key" as alias).
+    #[serde(default, alias = "key")]
     pub api_key: Option<String>,
 
     /// OAuth Bearer token (alternative to api_key, takes precedence).
@@ -89,8 +89,8 @@ pub struct ProviderConfig {
     #[serde(default)]
     pub base_url: Option<String>,
 
-    /// Default model for this provider.
-    #[serde(default)]
+    /// Default model for this provider (also accepts "model" as alias).
+    #[serde(default, alias = "model")]
     pub default_model: Option<String>,
 
     /// Default max tokens for this provider.
