@@ -357,7 +357,8 @@ pub async fn handle_command(
             CommandResult::Continue
         }
         "/copy" => {
-            let last = engine.messages.iter().rev().find_map(|m| {
+            let messages = engine.messages.lock().await;
+            let last = messages.iter().rev().find_map(|m| {
                 if let venus_core::message::Message::Assistant(a) = m { Some(a) } else { None }
             });
             if let Some(msg) = last {
@@ -394,10 +395,11 @@ pub async fn handle_command(
         }
         "/status" => {
             let uptime = chrono::Utc::now().timestamp() as u64 - engine.created_at;
-            let cost = engine.cost_tracker.format_cost();
+            let cost = engine.cost_tracker.lock().unwrap().format_cost();
+            let msg_count = engine.messages.lock().await.len();
             eprintln!("\n  Session status:");
             eprintln!("    Uptime:     {}s", uptime);
-            eprintln!("    Messages:   {}", engine.messages.len());
+            eprintln!("    Messages:   {}", msg_count);
             eprintln!("    Cost:       {}", cost);
             eprintln!("    Model:      {}", engine.model);
             eprintln!("    Plan mode:  {}", engine.plan_mode.load(std::sync::atomic::Ordering::Relaxed));
@@ -405,7 +407,7 @@ pub async fn handle_command(
             CommandResult::Continue
         }
         "/summary" => {
-            if engine.messages.len() < 4 {
+            if engine.messages.lock().await.len() < 4 {
                 eprintln!("  Not enough messages to summarize.\n");
                 return CommandResult::Continue;
             }
@@ -415,9 +417,11 @@ pub async fn handle_command(
         }
         "/export" => {
             let path = parts.get(1).map(|s| s.trim()).unwrap_or("conversation.json");
-            let values: Vec<serde_json::Value> = engine.messages.iter()
+            let messages = engine.messages.lock().await;
+            let values: Vec<serde_json::Value> = messages.iter()
                 .filter_map(|m| serde_json::to_value(m).ok())
                 .collect();
+            drop(messages);
             match serde_json::to_string_pretty(&values) {
                 Ok(json) => match std::fs::write(path, &json) {
                     Ok(()) => eprintln!("  Exported {} messages to {}\n", values.len(), path),
@@ -429,12 +433,13 @@ pub async fn handle_command(
         }
         "/rewind" => {
             let n: usize = parts.get(1).and_then(|s| s.trim().parse().ok()).unwrap_or(1);
-            let total = engine.messages.len();
+            let mut messages = engine.messages.lock().await;
+            let total = messages.len();
             let remove = (n * 2).min(total);
             if remove == 0 {
                 eprintln!("  Nothing to rewind.\n");
             } else {
-                engine.messages.drain((total - remove)..);
+                messages.drain((total - remove)..);
                 eprintln!("  Rewound {} messages.\n", remove);
             }
             CommandResult::Continue
