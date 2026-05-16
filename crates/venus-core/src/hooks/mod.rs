@@ -200,6 +200,11 @@ impl HookRunner {
         hook: &CommandHook,
         event: &HookEvent,
     ) -> Result<HookOutput> {
+        // Check if this is an HTTP hook
+        if hook.hook_type.as_deref() == Some("http") {
+            return self.execute_http_hook(hook, event).await;
+        }
+
         let payload = serde_json::to_string(event)?;
 
         debug!(
@@ -239,6 +244,66 @@ impl HookRunner {
             stdout.len(),
             stderr.len()
         );
+
+        Ok(HookOutput {
+            exit_code,
+            stdout,
+            stderr,
+        })
+    }
+
+    /// Execute an HTTP hook: POST JSON event payload to the configured URL.
+    async fn execute_http_hook(
+        &self,
+        hook: &CommandHook,
+        event: &HookEvent,
+    ) -> Result<HookOutput> {
+        let payload = serde_json::to_string(event)?;
+
+        debug!(
+            "executing HTTP hook: {} for event {}",
+            hook.command,
+            event.event_name()
+        );
+
+        let client = reqwest::Client::new();
+        let mut req = client
+            .post(&hook.command)
+            .header("Content-Type", "application/json")
+            .body(payload);
+
+        if let Some(ref headers) = hook.headers {
+            for (k, v) in headers {
+                req = req.header(k.as_str(), v.as_str());
+            }
+        }
+
+        let timeout_secs = if hook.timeout > 0 { hook.timeout } else { 10 };
+        let timeout = tokio::time::Duration::from_secs(timeout_secs);
+        let response = tokio::time::timeout(timeout, req.send())
+            .await
+            .map_err(|_| anyhow::anyhow!("HTTP hook timed out after {}s", timeout_secs))?
+            .map_err(|e| anyhow::anyhow!("HTTP hook request failed: {}", e))?;
+
+        let status_code = response.status().as_u16();
+        let stdout = response.text().await.unwrap_or_default();
+        let stderr = String::new();
+
+        debug!(
+            "HTTP hook completed: status={}, body_len={}",
+            status_code,
+            stdout.len()
+        );
+
+        // Map HTTP status to exit code semantics:
+        // 2xx = success (0), 4xx = client error (1), 5xx = server error (2)
+        let exit_code = if status_code >= 200 && status_code < 300 {
+            0
+        } else if status_code >= 400 && status_code < 500 {
+            1
+        } else {
+            2
+        };
 
         Ok(HookOutput {
             exit_code,

@@ -78,14 +78,27 @@ pub struct HookEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandHook {
-    /// Hook type (currently only "command").
+    /// Hook type: "command" (default, shell command) or "http" (POST to URL).
     #[serde(default, rename = "type")]
     pub hook_type: Option<String>,
-    /// Shell command string (executed via `sh -c`).
+    /// Shell command string (executed via `sh -c`) or URL for HTTP hooks.
     pub command: String,
     /// Timeout in seconds (default: 10).
     #[serde(default = "default_hook_timeout")]
     pub timeout: u64,
+    /// Conditional expression for hook execution (currently unused, reserved for future use).
+    #[serde(default)]
+    #[serde(rename = "if")]
+    pub r#if: Option<String>,
+    /// If true, this hook only runs once per session.
+    #[serde(default)]
+    pub once: bool,
+    /// If true, run this hook asynchronously (non-blocking).
+    #[serde(default)]
+    pub r#async: bool,
+    /// Custom HTTP headers for "http" type hooks.
+    #[serde(default)]
+    pub headers: Option<HashMap<String, String>>,
 }
 
 fn default_hook_timeout() -> u64 {

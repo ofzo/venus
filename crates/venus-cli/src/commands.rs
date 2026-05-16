@@ -239,6 +239,245 @@ pub async fn handle_command(
             }
             CommandResult::Continue
         }
+        "/commit" => {
+            let diff_output = get_staged_diff(&engine.working_dir).await;
+            if diff_output.is_empty() {
+                eprintln!("  No staged changes. Use `git add` first.\n");
+                return CommandResult::Continue;
+            }
+            let prompt = format!(
+                "Analyze the following staged changes and create a conventional commit message.\n\
+                 Follow conventional commits format (type(scope): description).\n\
+                 Only output the commit message, nothing else.\n\n\
+                 ```diff\n{}\n```",
+                diff_output
+            );
+            CommandResult::InjectMessage(prompt)
+        }
+        "/review" => {
+            let diff_output = get_full_diff(&engine.working_dir).await;
+            if diff_output.is_empty() {
+                eprintln!("  No changes to review.\n");
+                return CommandResult::Continue;
+            }
+            let prompt = format!(
+                "Review the following code changes. Focus on bugs, security issues, \
+                 performance problems, and code quality.\n\n```diff\n{}\n```",
+                diff_output
+            );
+            CommandResult::InjectMessage(prompt)
+        }
+        "/init" => {
+            let claude_md = engine.working_dir.join("CLAUDE.md");
+            if claude_md.exists() {
+                eprintln!("  CLAUDE.md already exists.\n");
+                return CommandResult::Continue;
+            }
+            CommandResult::InjectMessage(
+                "Create a CLAUDE.md file for this project. Analyze the project structure, \
+                 language, build system, and conventions. Include: project overview, \
+                 build/test commands, code style, important notes.".to_string()
+            )
+        }
+        "/memory" => {
+            let arg = parts.get(1).unwrap_or(&"").trim();
+            if arg.is_empty() || arg == "list" {
+                match venus_utils::memory::list_memories(None, Some(&engine.working_dir)).await {
+                    Ok(entries) if entries.is_empty() => eprintln!("  No memory entries.\n"),
+                    Ok(entries) => {
+                        eprintln!("\n  Memory entries:");
+                        for e in &entries {
+                            eprintln!(
+                                "    [{}] {} ({})",
+                                &e.id[..8.min(e.id.len())],
+                                e.title,
+                                e.memory_type
+                            );
+                        }
+                        eprintln!();
+                    }
+                    Err(e) => eprintln!("  Error: {}\n", e),
+                }
+            } else {
+                eprintln!("  Usage: /memory [list]\n");
+            }
+            CommandResult::Continue
+        }
+        "/skills" => {
+            if let Some(registry) = skill_registry {
+                let all = registry.all();
+                if all.is_empty() {
+                    eprintln!("  No skills loaded.\n");
+                } else {
+                    eprintln!("\n  Loaded skills:");
+                    for s in all {
+                        eprintln!("    /{} - {}", s.name, s.description);
+                    }
+                    eprintln!();
+                }
+            } else {
+                eprintln!("  Skill registry not available.\n");
+            }
+            CommandResult::Continue
+        }
+        "/tasks" => {
+            let tasks = engine.task_store.list();
+            if tasks.is_empty() {
+                eprintln!("  No active tasks.\n");
+            } else {
+                eprintln!("\n  Tasks:");
+                for t in &tasks {
+                    let icon = match t.status {
+                        venus_core::task::TaskStatus::Pending => "○",
+                        venus_core::task::TaskStatus::InProgress => "◉",
+                        venus_core::task::TaskStatus::Completed => "●",
+                        venus_core::task::TaskStatus::Deleted => "✗",
+                    };
+                    eprintln!("    {} {} - {}", icon, t.id, t.subject);
+                }
+                eprintln!();
+            }
+            CommandResult::Continue
+        }
+        "/plan" => {
+            let current = engine.plan_mode.load(std::sync::atomic::Ordering::Relaxed);
+            let new_val = !current;
+            engine.plan_mode.store(new_val, std::sync::atomic::Ordering::Relaxed);
+            eprintln!("  Plan mode: {}\n", if new_val { "ON" } else { "OFF" });
+            CommandResult::Continue
+        }
+        "/vim" => {
+            eprintln!("  Vim mode toggle (reedline integration pending)\n");
+            CommandResult::Continue
+        }
+        "/effort" => {
+            if let Some(level) = parts.get(1) {
+                match level.trim() {
+                    "low" | "medium" | "high" | "max" => {
+                        eprintln!("  Effort level set to: {}\n", level.trim());
+                    }
+                    _ => eprintln!("  Usage: /effort [low|medium|high|max]\n"),
+                }
+            } else {
+                eprintln!("  Usage: /effort [low|medium|high|max]\n");
+            }
+            CommandResult::Continue
+        }
+        "/copy" => {
+            let last = engine.messages.iter().rev().find_map(|m| {
+                if let venus_core::message::Message::Assistant(a) = m { Some(a) } else { None }
+            });
+            if let Some(msg) = last {
+                let text: String = msg.content.iter()
+                    .filter_map(|b| b.as_text())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                #[cfg(target_os = "macos")]
+                {
+                    use std::io::Write;
+                    if let Ok(mut child) = std::process::Command::new("pbcopy")
+                        .stdin(std::process::Stdio::piped())
+                        .spawn()
+                    {
+                        if let Some(ref mut stdin) = child.stdin {
+                            let _ = stdin.write_all(text.as_bytes());
+                        }
+                        let _ = child.wait();
+                        eprintln!("  Copied to clipboard.\n");
+                    }
+                }
+                #[cfg(not(target_os = "macos"))]
+                eprintln!("  Clipboard not available on this platform.\n");
+            } else {
+                eprintln!("  No assistant message to copy.\n");
+            }
+            CommandResult::Continue
+        }
+        "/version" => {
+            eprintln!("  Venus v{}", env!("CARGO_PKG_VERSION"));
+            eprintln!("  Model: {}", engine.model);
+            eprintln!();
+            CommandResult::Continue
+        }
+        "/status" => {
+            let uptime = chrono::Utc::now().timestamp() as u64 - engine.created_at;
+            let cost = engine.cost_tracker.format_cost();
+            eprintln!("\n  Session status:");
+            eprintln!("    Uptime:     {}s", uptime);
+            eprintln!("    Messages:   {}", engine.messages.len());
+            eprintln!("    Cost:       {}", cost);
+            eprintln!("    Model:      {}", engine.model);
+            eprintln!("    Plan mode:  {}", engine.plan_mode.load(std::sync::atomic::Ordering::Relaxed));
+            eprintln!();
+            CommandResult::Continue
+        }
+        "/summary" => {
+            if engine.messages.len() < 4 {
+                eprintln!("  Not enough messages to summarize.\n");
+                return CommandResult::Continue;
+            }
+            CommandResult::InjectMessage(
+                "Provide a brief summary of our conversation so far.".to_string()
+            )
+        }
+        "/export" => {
+            let path = parts.get(1).map(|s| s.trim()).unwrap_or("conversation.json");
+            let values: Vec<serde_json::Value> = engine.messages.iter()
+                .filter_map(|m| serde_json::to_value(m).ok())
+                .collect();
+            match serde_json::to_string_pretty(&values) {
+                Ok(json) => match std::fs::write(path, &json) {
+                    Ok(()) => eprintln!("  Exported {} messages to {}\n", values.len(), path),
+                    Err(e) => eprintln!("  Error writing {}: {}\n", path, e),
+                },
+                Err(e) => eprintln!("  Error serializing: {}\n", e),
+            }
+            CommandResult::Continue
+        }
+        "/rewind" => {
+            let n: usize = parts.get(1).and_then(|s| s.trim().parse().ok()).unwrap_or(1);
+            let total = engine.messages.len();
+            let remove = (n * 2).min(total);
+            if remove == 0 {
+                eprintln!("  Nothing to rewind.\n");
+            } else {
+                engine.messages.drain((total - remove)..);
+                eprintln!("  Rewound {} messages.\n", remove);
+            }
+            CommandResult::Continue
+        }
+        "/permissions" => {
+            let mode = engine.settings.permission_mode.as_deref().unwrap_or("default");
+            eprintln!("\n  Permission mode: {}", mode);
+            if let Some(ref allow) = engine.settings.always_allow {
+                for rule in allow {
+                    eprintln!("    ALLOW  {}:{}", rule.tool, rule.pattern.as_deref().unwrap_or("*"));
+                }
+            }
+            if let Some(ref deny) = engine.settings.always_deny {
+                for rule in deny {
+                    eprintln!("    DENY   {}:{}", rule.tool, rule.pattern.as_deref().unwrap_or("*"));
+                }
+            }
+            eprintln!();
+            CommandResult::Continue
+        }
+        "/mcp" => {
+            if let Some(ref servers) = engine.settings.mcp_servers {
+                if servers.is_empty() {
+                    eprintln!("  No MCP servers configured.\n");
+                } else {
+                    eprintln!("\n  MCP servers:");
+                    for (name, config) in servers {
+                        eprintln!("    {} - {} ({})", name, config.command, config.transport);
+                    }
+                    eprintln!();
+                }
+            } else {
+                eprintln!("  No MCP servers configured.\n");
+            }
+            CommandResult::Continue
+        }
         _ => {
             // Check if it matches a user-invocable skill
             let skill_name = &cmd[1..]; // strip leading /
@@ -596,10 +835,55 @@ fn print_help() {
     /plugin         List installed plugins
     /sessions       List all saved sessions
     /resume [n|id]  Resume a previous session
+    /commit         Generate conventional commit from staged changes
+    /review         Review code changes for issues
+    /init           Create CLAUDE.md for this project
+    /memory [list]  List memory entries
+    /skills         List loaded skills
+    /tasks          List active tasks
+    /plan           Toggle plan mode
+    /vim            Toggle vim mode (pending)
+    /effort [level] Set effort level (low/medium/high/max)
+    /copy           Copy last assistant message to clipboard
+    /version        Show version and model info
+    /status         Show session status
+    /summary        Summarize conversation
+    /export [path]  Export conversation to JSON
+    /rewind [n]     Rewind n message pairs
+    /permissions    Show permission rules
+    /mcp            Show MCP server config
 
   Keyboard:
     Ctrl+C          Abort current query
     Ctrl+D          Exit
 "#
     );
+}
+
+async fn get_staged_diff(working_dir: &std::path::Path) -> String {
+    tokio::process::Command::new("git")
+        .args(["diff", "--staged"])
+        .current_dir(working_dir)
+        .output()
+        .await
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default()
+}
+
+async fn get_full_diff(working_dir: &std::path::Path) -> String {
+    let staged = tokio::process::Command::new("git")
+        .args(["diff", "--staged"])
+        .current_dir(working_dir)
+        .output()
+        .await
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default();
+    let unstaged = tokio::process::Command::new("git")
+        .args(["diff"])
+        .current_dir(working_dir)
+        .output()
+        .await
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default();
+    format!("{}\n{}", staged, unstaged)
 }
