@@ -36,11 +36,18 @@ pub async fn run_repl(engine: &mut QueryEngine, skill_registry: Option<Arc<Skill
 
     // Move input reading to a dedicated thread
     let (input_tx, mut input_rx) = mpsc::unbounded_channel::<Option<String>>();
+    let (vim_tx, mut vim_rx) = mpsc::unbounded_channel::<bool>();
 
     let history_path = input::default_history_path();
     std::thread::spawn(move || {
         let mut editor = input::InputEditor::new(history_path);
         loop {
+            // Check for vim toggle signals (non-blocking)
+            if let Ok(toggle) = vim_rx.try_recv() {
+                if toggle {
+                    editor.toggle_vim_mode();
+                }
+            }
             match editor.read_line() {
                 Some(line) => {
                     if input_tx.send(Some(line)).is_err() {
@@ -74,6 +81,10 @@ pub async fn run_repl(engine: &mut QueryEngine, skill_registry: Option<Arc<Skill
                                         Ok(_) => save_current_session(engine).await,
                                         Err(e) => eprintln!("\x1b[31mError: {}\x1b[0m", e),
                                     }
+                                }
+                                CommandResult::ToggleVim => {
+                                    vim_tx.send(true).ok();
+                                    eprintln!("  Vim mode toggled.\n");
                                 }
                                 CommandResult::Continue => {}
                             }

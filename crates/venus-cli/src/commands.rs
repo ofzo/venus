@@ -15,6 +15,8 @@ pub enum CommandResult {
     Exit,
     /// Inject a message as if the user typed it (used for skill invocation).
     InjectMessage(String),
+    /// Toggle vim mode in the editor.
+    ToggleVim,
 }
 
 /// Handle a slash command.
@@ -340,8 +342,7 @@ pub async fn handle_command(
             CommandResult::Continue
         }
         "/vim" => {
-            eprintln!("  Vim mode toggle (reedline integration pending)\n");
-            CommandResult::Continue
+            CommandResult::ToggleVim
         }
         "/effort" => {
             if let Some(level) = parts.get(1) {

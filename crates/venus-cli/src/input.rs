@@ -1,9 +1,10 @@
 use std::path::PathBuf;
 
 use reedline::{
-    default_emacs_keybindings, ColumnarMenu, Completer, DefaultPrompt, DefaultPromptSegment,
+    default_emacs_keybindings, default_vi_insert_keybindings, default_vi_normal_keybindings,
+    ColumnarMenu, Completer, DefaultPrompt, DefaultPromptSegment,
     EditCommand, Emacs, FileBackedHistory, KeyCode, KeyModifiers, MenuBuilder, Reedline,
-    ReedlineEvent, ReedlineMenu, Signal, Span, Suggestion,
+    ReedlineEvent, ReedlineMenu, Signal, Span, Suggestion, Vi,
 };
 
 /// Slash commands available for tab completion.
@@ -23,17 +24,38 @@ const SLASH_COMMANDS: &[&str] = &[
     "/tokens",
     "/sessions",
     "/resume",
+    "/commit",
+    "/review",
+    "/init",
+    "/memory",
+    "/skills",
+    "/tasks",
+    "/plan",
+    "/vim",
+    "/effort",
+    "/copy",
+    "/version",
+    "/status",
+    "/summary",
+    "/export",
+    "/rewind",
+    "/permissions",
+    "/mcp",
+    "/plugin",
 ];
 
 /// A REPL input handler backed by reedline.
 pub struct InputEditor {
     editor: Reedline,
     prompt: DefaultPrompt,
+    vim_mode: bool,
+    history_path: Option<PathBuf>,
 }
 
 impl InputEditor {
     pub fn new(history_path: Option<PathBuf>) -> Self {
         let history = history_path
+            .clone()
             .and_then(|p| {
                 // Ensure parent directory exists
                 if let Some(parent) = p.parent() {
@@ -83,7 +105,48 @@ impl InputEditor {
             DefaultPromptSegment::Empty,
         );
 
-        Self { editor, prompt }
+        Self { editor, prompt, vim_mode: false, history_path }
+    }
+
+    /// Toggle between Emacs and Vi edit modes.
+    pub fn toggle_vim_mode(&mut self) -> bool {
+        self.vim_mode = !self.vim_mode;
+        // Rebuild the editor with the new edit mode
+        *self = InputEditor::new(self.history_path.clone());
+        self.vim_mode = !self.vim_mode; // set to desired state
+        // If vim was just toggled ON, rebuild again with vim
+        if self.vim_mode {
+            let completer = Box::new(SlashCompleter);
+            let completion_menu = Box::new(
+                ColumnarMenu::default()
+                    .with_name("completion_menu")
+                    .with_columns(4),
+            );
+            let insert_keybindings = default_vi_insert_keybindings();
+            let normal_keybindings = default_vi_normal_keybindings();
+            let edit_mode = Box::new(Vi::new(insert_keybindings, normal_keybindings));
+
+            let history = self.history_path
+                .clone()
+                .and_then(|p| FileBackedHistory::with_file(1000, p).ok());
+
+            let mut editor = Reedline::create()
+                .with_completer(completer)
+                .with_menu(ReedlineMenu::EngineCompleter(completion_menu))
+                .with_edit_mode(edit_mode);
+
+            if let Some(history) = history {
+                editor = editor.with_history(Box::new(history));
+            }
+
+            self.editor = editor;
+        }
+        self.vim_mode
+    }
+
+    /// Check if vim mode is active.
+    pub fn is_vim_mode(&self) -> bool {
+        self.vim_mode
     }
 
     /// Read a line of input. Returns None on Ctrl+D (EOF).
