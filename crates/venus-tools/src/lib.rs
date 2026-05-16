@@ -36,6 +36,7 @@ pub mod task_output;
 pub mod task_stop;
 pub mod task_update;
 pub mod tool_search;
+pub mod web_browser;
 pub mod web_fetch;
 pub mod web_search;
 pub mod workflow;
@@ -85,5 +86,6 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         Box::new(todo::TodoWriteTool),
         Box::new(config_tool::ConfigTool),
         Box::new(brief::BriefTool),
+        Box::new(web_browser::WebBrowserTool),
     ]
 }

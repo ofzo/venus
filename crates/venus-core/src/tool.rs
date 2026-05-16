@@ -7,8 +7,9 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 use crate::background::BackgroundTaskRuntime;
-use crate::message::ContentBlock;
+use crate::message::{ContentBlock, Message};
 use crate::task::TaskStore;
+use tokio::sync::Mutex;
 use venus_utils::config::Settings;
 
 /// Result of a tool execution.
@@ -61,6 +62,8 @@ pub struct ToolContext {
     pub task_store: Arc<TaskStore>,
     pub background_runtime: Arc<BackgroundTaskRuntime>,
     pub plan_mode: Arc<AtomicBool>,
+    /// Shared message history - tools can read and modify conversation.
+    pub messages: Arc<Mutex<Vec<Message>>>,
     // Fields needed for sub-agent spawning
     pub auth_header: &'static str,
     pub auth_value: String,

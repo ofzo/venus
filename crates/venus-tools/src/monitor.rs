@@ -200,6 +200,7 @@ mod tests {
             task_store: Arc::new(TaskStore::new()),
             background_runtime: Arc::new(BackgroundTaskRuntime::new()),
             plan_mode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            messages: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             auth_header: "",
             auth_value: String::new(),
             base_url: String::new(),

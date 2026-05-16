@@ -371,6 +371,7 @@ impl QueryEngine {
             task_store: self.task_store.clone(),
             background_runtime: self.background_runtime.clone(),
             plan_mode: self.plan_mode.clone(),
+            messages: self.messages.clone(),
             auth_header: self.auth_header,
             auth_value: self.auth_value.clone(),
             base_url: self.base_url.clone(),

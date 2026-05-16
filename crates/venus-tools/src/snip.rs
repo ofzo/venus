@@ -27,11 +27,11 @@ impl Tool for SnipTool {
         })
     }
 
-    async fn execute(&self, input: Value, _ctx: &ToolContext) -> Result<ToolResult> {
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> Result<ToolResult> {
         let keep_last = input
             .get("keep_last")
             .and_then(|v| v.as_u64())
-            .unwrap_or(10);
+            .unwrap_or(10) as usize;
 
         if keep_last == 0 {
             return Ok(ToolResult::error(
@@ -45,10 +45,22 @@ impl Tool for SnipTool {
             ));
         }
 
+        let mut messages = ctx.messages.lock().await;
+        let total = messages.len();
+
+        if total <= keep_last {
+            return Ok(ToolResult::text(format!(
+                "No snip needed: conversation has {} messages, keeping last {}.",
+                total, keep_last
+            )));
+        }
+
+        let removed = total - keep_last;
+        messages.drain(..removed);
+
         Ok(ToolResult::text(format!(
-            "Conversation snip requested: keep last {} messages. \
-             The system will trim older messages from the conversation history.",
-            keep_last
+            "Snipped {} messages. Conversation now has {} messages (kept last {}).",
+            removed, messages.len(), keep_last
         )))
     }
 
@@ -93,6 +105,7 @@ mod tests {
             task_store: Arc::new(TaskStore::new()),
             background_runtime: Arc::new(BackgroundTaskRuntime::new()),
             plan_mode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            messages: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             auth_header: "",
             auth_value: String::new(),
             base_url: String::new(),
@@ -112,7 +125,7 @@ mod tests {
 
         let result = tool.execute(input, &ctx).await.unwrap();
         assert!(!result.is_error);
-        assert!(result.content[0].as_text().unwrap().contains("keep last 10 messages"));
+        assert!(result.content[0].as_text().unwrap().contains("No snip needed"));
     }
 
     #[tokio::test]
