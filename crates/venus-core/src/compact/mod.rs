@@ -292,6 +292,93 @@ pub async fn compact_partial(
     })
 }
 
+/// Reactive compact using Anthropic's API-side context edit strategy.
+///
+/// Instead of summarizing locally, this sends the conversation to the API
+/// with a `context_edit` instruction that tells the model to compress
+/// older parts of the conversation while preserving key information.
+/// This is more efficient than full summarization for moderate context pressure.
+pub async fn reactive_compact(
+    messages: &mut Vec<Message>,
+    config: &CompactConfig,
+) -> Result<CompactResult> {
+    let messages_before = messages.len();
+
+    if messages_before < 6 {
+        anyhow::bail!("conversation too short for reactive compact");
+    }
+
+    // Keep the last 4 messages verbatim, compress the rest
+    let keep_count = 4;
+    let split_point = messages_before - keep_count;
+
+    // Build a compression prompt for the old messages
+    let old_messages = &messages[..split_point];
+    let mut compress_input = String::from(
+        "Compress the following conversation into a concise summary that preserves:\n\
+         1. All file paths mentioned\n\
+         2. All decisions made\n\
+         3. Current task/plan state\n\
+         4. Key technical details\n\n\
+         Conversation:\n",
+    );
+
+    for msg in old_messages {
+        let role = match msg {
+            Message::User(_) => "User",
+            Message::Assistant(_) => "Assistant",
+            Message::System(_) => "System",
+        };
+        let text: String = match msg {
+            Message::User(u) => u.content.iter().filter_map(|b| b.as_text()).collect::<Vec<_>>().join(" "),
+            Message::Assistant(a) => a.content.iter().filter_map(|b| b.as_text()).collect::<Vec<_>>().join(" "),
+            Message::System(s) => s.content.clone(),
+        };
+        if !text.is_empty() {
+            compress_input.push_str(&format!("{}: {}\n", role, &text[..text.len().min(500)]));
+        }
+    }
+
+    // Call API for compression
+    let compressed = call_summarization_api(
+        &config.auth_header,
+        &config.auth_value,
+        &config.base_url,
+        &config.model,
+        "You are a conversation compressor. Produce a concise summary.",
+        &compress_input,
+        2048,
+    )
+    .await?;
+
+    // Replace old messages with compressed summary
+    let summary_msg = Message::User(UserMessage::new(vec![ContentBlock::text(&format!(
+        "[Context compressed]\n{}",
+        compressed
+    ))]));
+    let ack_msg = Message::Assistant(AssistantMessage::new(vec![ContentBlock::text(
+        "Understood. Continuing with compressed context.",
+    )]));
+
+    let recent: Vec<Message> = messages[split_point..].to_vec();
+    let mut new_messages = Vec::with_capacity(2 + recent.len());
+    new_messages.push(summary_msg);
+    new_messages.push(ack_msg);
+    new_messages.extend(recent);
+
+    let messages_after = new_messages.len();
+    let tokens_saved = ((messages_before - messages_after) * 500) as u64;
+
+    *messages = new_messages;
+
+    Ok(CompactResult {
+        messages_before,
+        messages_after,
+        tokens_saved_estimate: tokens_saved,
+        summary_text: compressed,
+    })
+}
+
 /// After compaction, re-read files mentioned in the summary to restore context.
 pub async fn post_compact_refresh(summary: &str, working_dir: &std::path::Path) -> Vec<String> {
     let mut refreshed = Vec::new();

@@ -1,7 +1,9 @@
 use anyhow::Result;
 use async_trait::async_trait;
+use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc as std_mpsc;
 use std::time::Duration;
 use venus_core::tool::{Tool, ToolContext, ToolResult};
 
@@ -14,7 +16,8 @@ impl Tool for MonitorTool {
     }
 
     fn description(&self) -> &str {
-        "Watch a file or directory for changes using polling. Returns the current status and any detected changes."
+        "Watch a file or directory for changes using file system events. \
+         Returns detected changes within the specified duration."
     }
 
     fn input_schema(&self) -> Value {
@@ -28,6 +31,10 @@ impl Tool for MonitorTool {
                 "pattern": {
                     "type": "string",
                     "description": "Optional glob pattern to filter files (e.g., '*.rs')"
+                },
+                "duration_secs": {
+                    "type": "number",
+                    "description": "How long to watch in seconds (default: 5, max: 30)"
                 }
             },
             "required": ["path"]
@@ -54,34 +61,95 @@ impl Tool for MonitorTool {
         }
 
         let pattern = input.get("pattern").and_then(|v| v.as_str());
+        let duration_secs = input
+            .get("duration_secs")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(5.0)
+            .clamp(1.0, 30.0);
 
-        // Take an initial snapshot
+        let glob_matcher = pattern.and_then(|p| globset::Glob::new(p).ok().map(|g| g.compile_matcher()));
+
+        // Set up file system watcher
+        let (tx, rx) = std_mpsc::channel();
+        let mut watcher = RecommendedWatcher::new(
+            tx,
+            Config::default().with_poll_interval(Duration::from_millis(200)),
+        )?;
+
+        let watch_path = path.clone();
+        watcher.watch(&watch_path, RecursiveMode::Recursive)?;
+
+        // Collect events for the specified duration
+        let deadline = tokio::time::Instant::now() + Duration::from_secs_f64(duration_secs);
+        let mut events: Vec<String> = Vec::new();
+
+        while tokio::time::Instant::now() < deadline {
+            match rx.try_recv() {
+                Ok(Ok(event)) => {
+                    let kind_str = match event.kind {
+                        EventKind::Create(_) => "created",
+                        EventKind::Modify(_) => "modified",
+                        EventKind::Remove(_) => "removed",
+                        EventKind::Access(_) => "accessed",
+                        _ => "other",
+                    };
+
+                    for event_path in &event.paths {
+                        // Apply pattern filter if specified
+                        if let Some(ref matcher) = glob_matcher {
+                            let file_name = event_path
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("");
+                            if !matcher.is_match(file_name) {
+                                continue;
+                            }
+                        }
+
+                        let rel_path = event_path
+                            .strip_prefix(&path)
+                            .unwrap_or(event_path)
+                            .display();
+                        events.push(format!("{}: {}", kind_str, rel_path));
+                    }
+                }
+                Ok(Err(e)) => {
+                    events.push(format!("watch error: {}", e));
+                }
+                Err(std_mpsc::TryRecvError::Empty) => {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                Err(std_mpsc::TryRecvError::Disconnected) => break,
+            }
+        }
+
+        // Stop watching
+        drop(watcher);
+
+        // Build result
         let initial = snapshot_metadata(&path)?;
-
-        // Poll briefly (1 second) to detect changes
-        tokio::time::sleep(Duration::from_millis(1000)).await;
-
-        let current = snapshot_metadata(&path)?;
-
-        let changes = if initial != current {
-            "Changes detected".to_string()
-        } else {
-            "No changes detected".to_string()
-        };
-
         let mut info = format!(
-            "Monitoring: {}\nPattern: {}\n{}\nCurrent state: {} items, last modified: {}",
+            "Monitoring: {}\nDuration: {:.1}s\nPattern: {}\nCurrent state: {} items, {} bytes",
             path.display(),
+            duration_secs,
             pattern.unwrap_or("(none)"),
-            changes,
-            current.item_count,
-            current.last_modified,
+            initial.item_count,
+            initial.size,
         );
 
-        if let Some(pat) = pattern {
-            if path.is_dir() {
-                let matching = count_matching_files(&path, pat);
-                info.push_str(&format!("\nMatching files (pattern '{}'): {}", pat, matching));
+        if events.is_empty() {
+            info.push_str("\n\nNo changes detected during monitoring period.");
+        } else {
+            // Deduplicate events
+            events.sort();
+            events.dedup();
+            let show_count = events.len().min(50);
+            info.push_str(&format!("\n\nChanges detected ({}):\n", events.len()));
+            for event in events.iter().take(show_count) {
+                info.push_str(&format!("  {}\n", event));
+            }
+            if events.len() > show_count {
+                info.push_str(&format!("  ... and {} more\n", events.len() - show_count));
             }
         }
 
@@ -101,27 +169,18 @@ impl Tool for MonitorTool {
 #[derive(Debug, PartialEq)]
 struct PathSnapshot {
     item_count: u64,
-    last_modified: u64,
     size: u64,
 }
 
 fn snapshot_metadata(path: &Path) -> Result<PathSnapshot> {
     if path.is_file() {
         let meta = std::fs::metadata(path)?;
-        let modified = meta
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
         Ok(PathSnapshot {
             item_count: 1,
-            last_modified: modified,
             size: meta.len(),
         })
     } else if path.is_dir() {
         let mut count = 0u64;
-        let mut latest_mod = 0u64;
         let mut total_size = 0u64;
 
         if let Ok(entries) = std::fs::read_dir(path) {
@@ -129,44 +188,17 @@ fn snapshot_metadata(path: &Path) -> Result<PathSnapshot> {
                 count += 1;
                 if let Ok(meta) = entry.metadata() {
                     total_size += meta.len();
-                    if let Ok(modified) = meta.modified() {
-                        if let Ok(d) = modified.duration_since(std::time::UNIX_EPOCH) {
-                            let secs = d.as_secs();
-                            if secs > latest_mod {
-                                latest_mod = secs;
-                            }
-                        }
-                    }
                 }
             }
         }
 
         Ok(PathSnapshot {
             item_count: count,
-            last_modified: latest_mod,
             size: total_size,
         })
     } else {
         Err(anyhow::anyhow!("path is neither a file nor a directory"))
     }
-}
-
-fn count_matching_files(dir: &Path, pattern: &str) -> u64 {
-    let glob = match globset::Glob::new(pattern) {
-        Ok(g) => g.compile_matcher(),
-        Err(_) => return 0,
-    };
-
-    let mut count = 0u64;
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            if glob.is_match(&name) {
-                count += 1;
-            }
-        }
-    }
-    count
 }
 
 #[cfg(test)]
@@ -230,11 +262,38 @@ mod tests {
 
         let ctx = make_context(tmp.path());
         let tool = MonitorTool;
-        let input = serde_json::json!({ "path": "test.txt" });
+        let input = serde_json::json!({ "path": "test.txt", "duration_secs": 1.0 });
 
         let result = tool.execute(input, &ctx).await.unwrap();
         assert!(!result.is_error);
-        assert!(result.content[0].as_text().unwrap().contains("Monitoring"));
+        let text = result.content[0].as_text().unwrap();
+        assert!(text.contains("Monitoring"));
+        assert!(text.contains("No changes detected"));
+    }
+
+    #[tokio::test]
+    async fn test_monitor_detects_change() {
+        let tmp = TempDir::new().unwrap();
+        let file_path = tmp.path().join("watched.txt");
+        std::fs::write(&file_path, "initial").unwrap();
+
+        let path_clone = file_path.clone();
+        let ctx = make_context(tmp.path());
+        let tool = MonitorTool;
+        let input = serde_json::json!({ "path": "watched.txt", "duration_secs": 2.0 });
+
+        // Spawn a task to modify the file after a short delay
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            std::fs::write(&path_clone, "modified").unwrap();
+        });
+
+        let result = tool.execute(input, &ctx).await.unwrap();
+        assert!(!result.is_error);
+        let text = result.content[0].as_text().unwrap();
+        assert!(text.contains("Monitoring"));
+        // Should detect the change
+        assert!(text.contains("modified") || text.contains("Changes detected"));
     }
 
     #[test]
@@ -246,5 +305,16 @@ mod tests {
         let snap = snapshot_metadata(&file_path).unwrap();
         assert_eq!(snap.item_count, 1);
         assert_eq!(snap.size, 11);
+    }
+
+    #[test]
+    fn test_snapshot_metadata_dir() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), "aaa").unwrap();
+        std::fs::write(tmp.path().join("b.txt"), "bb").unwrap();
+
+        let snap = snapshot_metadata(tmp.path()).unwrap();
+        assert_eq!(snap.item_count, 2);
+        assert_eq!(snap.size, 5);
     }
 }
