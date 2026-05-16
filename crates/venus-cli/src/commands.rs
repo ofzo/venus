@@ -1,3 +1,4 @@
+use std::io::{self, Write};
 use std::sync::Arc;
 
 use venus_core::engine::QueryEngine;
@@ -6,6 +7,20 @@ use venus_core::skill::SkillRegistry;
 use venus_utils::session;
 
 use crate::render;
+
+/// Print a line to stderr using \r\n (required for raw-mode terminal).
+macro_rules! eprintlf {
+    () => {
+        let stderr = io::stderr();
+        let mut out = stderr.lock();
+        let _ = write!(out, "\r\n");
+    };
+    ($($arg:tt)*) => {{
+        let stderr = io::stderr();
+        let mut out = stderr.lock();
+        let _ = write!(out, "{}\r\n", format_args!($($arg)*));
+    }};
+}
 
 /// Result of handling a slash command.
 pub enum CommandResult {
@@ -31,7 +46,7 @@ pub async fn handle_command(
 
     match cmd {
         "/exit" | "/quit" | "/q" => {
-            eprintln!("Goodbye!");
+            eprintlf!("Goodbye!");
             CommandResult::Exit
         }
         "/help" | "/h" => {
@@ -40,7 +55,7 @@ pub async fn handle_command(
         }
         "/clear" => {
             engine.messages.lock().await.clear();
-            eprintln!("  Conversation cleared.\n");
+            eprintlf!("  Conversation cleared.");
             CommandResult::Continue
         }
         "/cost" => {
@@ -50,15 +65,15 @@ pub async fn handle_command(
         "/model" => {
             if let Some(model) = parts.get(1) {
                 engine.model = model.to_string();
-                eprintln!("  Model changed to: {}\n", model);
+                eprintlf!("  Model changed to: {}", model);
             } else {
-                eprintln!("  Current model: {}\n", engine.model);
+                eprintlf!("  Current model: {}", engine.model);
             }
             CommandResult::Continue
         }
         "/history" => {
             let count = engine.messages.lock().await.len();
-            eprintln!("  {} messages in conversation\n", count);
+            eprintlf!("  {} messages in conversation", count);
             CommandResult::Continue
         }
         "/diff" => {
@@ -98,14 +113,14 @@ pub async fn handle_command(
             match result {
                 Ok(sessions) => {
                     if sessions.is_empty() {
-                        eprintln!("  No saved sessions.\n");
+                        eprintlf!("  No saved sessions.");
                     } else {
-                        eprintln!("\n  Saved sessions:");
+                        eprintlf!("\r\n  Saved sessions:");
                         for (i, s) in sessions.iter().enumerate() {
                             let time = chrono::DateTime::from_timestamp(s.updated_at as i64, 0)
                                 .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
                                 .unwrap_or_else(|| "unknown".to_string());
-                            eprintln!(
+                            eprintlf!(
                                 "  {:>3}. {} | {} msgs | {} | {}",
                                 i + 1,
                                 &s.id[..8],
@@ -114,11 +129,11 @@ pub async fn handle_command(
                                 time,
                             );
                         }
-                        eprintln!("\n  Use /resume <number> to resume a session.\n");
+                        eprintlf!("\r\n  Use /resume <number> to resume a session.");
                     }
                 }
                 Err(e) => {
-                    eprintln!("  Error listing sessions: {}\n", e);
+                    eprintlf!("  Error listing sessions: {}", e);
                 }
             }
             CommandResult::Continue
@@ -138,20 +153,20 @@ pub async fn handle_command(
             let sessions = match sessions_result {
                 Ok(s) => s,
                 Err(e) => {
-                    eprintln!("  Error listing sessions: {}\n", e);
+                    eprintlf!("  Error listing sessions: {}", e);
                     return CommandResult::Continue;
                 }
             };
 
             if sessions.is_empty() {
-                eprintln!("  No saved sessions.\n");
+                eprintlf!("  No saved sessions.");
                 return CommandResult::Continue;
             }
 
             let session_id = if let Some(ref a) = arg {
                 if let Ok(idx) = a.parse::<usize>() {
                     if idx == 0 || idx > sessions.len() {
-                        eprintln!("  Invalid session number. Use 1-{}.\n", sessions.len());
+                        eprintlf!("  Invalid session number. Use 1-{}.", sessions.len());
                         return CommandResult::Continue;
                     }
                     sessions[idx - 1].id.clone()
@@ -159,19 +174,19 @@ pub async fn handle_command(
                     match sessions.iter().find(|s| s.id.starts_with(a.as_str())) {
                         Some(s) => s.id.clone(),
                         None => {
-                            eprintln!("  No session matching '{}' found.\n", a);
+                            eprintlf!("  No session matching '{}' found.", a);
                             return CommandResult::Continue;
                         }
                     }
                 }
             } else {
-                eprintln!("\n  Recent sessions:");
+                eprintlf!("\r\n  Recent sessions:");
                 let display_count = sessions.len().min(10);
                 for (i, s) in sessions.iter().take(display_count).enumerate() {
                     let time = chrono::DateTime::from_timestamp(s.updated_at as i64, 0)
                         .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
                         .unwrap_or_else(|| "unknown".to_string());
-                    eprintln!(
+                    eprintlf!(
                         "  {:>3}. {} | {} msgs | {} | {}",
                         i + 1,
                         &s.id[..8],
@@ -180,7 +195,7 @@ pub async fn handle_command(
                         time,
                     );
                 }
-                eprintln!("\n  Enter number to resume (or press Enter to cancel):");
+                eprintlf!("\r\n  Enter number to resume (or press Enter to cancel):");
                 eprint!("  > ");
                 std::io::Write::flush(&mut std::io::stderr()).ok();
 
@@ -190,7 +205,7 @@ pub async fn handle_command(
                 }
                 let choice = choice.trim();
                 if choice.is_empty() {
-                    eprintln!("  Cancelled.\n");
+                    eprintlf!("  Cancelled.");
                     return CommandResult::Continue;
                 }
                 match choice.parse::<usize>() {
@@ -198,7 +213,7 @@ pub async fn handle_command(
                         sessions[idx - 1].id.clone()
                     }
                     _ => {
-                        eprintln!("  Invalid choice.\n");
+                        eprintlf!("  Invalid choice.");
                         return CommandResult::Continue;
                     }
                 }
@@ -222,14 +237,14 @@ pub async fn handle_command(
                     *engine.messages.lock().await = messages;
                     engine.session_id = meta.id.clone();
                     engine.created_at = meta.created_at;
-                    eprintln!(
-                        "  Resumed session {} ({} messages)\n",
+                    eprintlf!(
+                        "  Resumed session {} ({} messages)",
                         &meta.id[..8],
                         msg_count,
                     );
                 }
                 Err(e) => {
-                    eprintln!("  Error loading session: {}\n", e);
+                    eprintlf!("  Error loading session: {}", e);
                 }
             }
             CommandResult::Continue
@@ -237,7 +252,7 @@ pub async fn handle_command(
         "/commit" => {
             let diff_output = get_staged_diff(&engine.working_dir).await;
             if diff_output.is_empty() {
-                eprintln!("  No staged changes. Use `git add` first.\n");
+                eprintlf!("  No staged changes. Use `git add` first.");
                 return CommandResult::Continue;
             }
             let prompt = format!(
@@ -252,7 +267,7 @@ pub async fn handle_command(
         "/review" => {
             let diff_output = get_full_diff(&engine.working_dir).await;
             if diff_output.is_empty() {
-                eprintln!("  No changes to review.\n");
+                eprintlf!("  No changes to review.");
                 return CommandResult::Continue;
             }
             let prompt = format!(
@@ -265,7 +280,7 @@ pub async fn handle_command(
         "/init" => {
             let venus_md = engine.working_dir.join("VENUS.md");
             if venus_md.exists() {
-                eprintln!("  VENUS.md already exists.\n");
+                eprintlf!("  VENUS.md already exists.");
                 return CommandResult::Continue;
             }
             CommandResult::InjectMessage(
@@ -278,23 +293,23 @@ pub async fn handle_command(
             let arg = parts.get(1).unwrap_or(&"").trim();
             if arg.is_empty() || arg == "list" {
                 match venus_utils::memory::list_memories(None, Some(&engine.working_dir)).await {
-                    Ok(entries) if entries.is_empty() => eprintln!("  No memory entries.\n"),
+                    Ok(entries) if entries.is_empty() => eprintlf!("  No memory entries."),
                     Ok(entries) => {
-                        eprintln!("\n  Memory entries:");
+                        eprintlf!("\r\n  Memory entries:");
                         for e in &entries {
-                            eprintln!(
+                            eprintlf!(
                                 "    [{}] {} ({})",
                                 &e.id[..8.min(e.id.len())],
                                 e.title,
                                 e.memory_type
                             );
                         }
-                        eprintln!();
+                        eprintlf!();
                     }
-                    Err(e) => eprintln!("  Error: {}\n", e),
+                    Err(e) => eprintlf!("  Error: {}", e),
                 }
             } else {
-                eprintln!("  Usage: /memory [list]\n");
+                eprintlf!("  Usage: /memory [list]");
             }
             CommandResult::Continue
         }
@@ -302,25 +317,25 @@ pub async fn handle_command(
             if let Some(registry) = skill_registry {
                 let all = registry.all();
                 if all.is_empty() {
-                    eprintln!("  No skills loaded.\n");
+                    eprintlf!("  No skills loaded.");
                 } else {
-                    eprintln!("\n  Loaded skills:");
+                    eprintlf!("\r\n  Loaded skills:");
                     for s in all {
-                        eprintln!("    /{} - {}", s.name, s.description);
+                        eprintlf!("    /{} - {}", s.name, s.description);
                     }
-                    eprintln!();
+                    eprintlf!();
                 }
             } else {
-                eprintln!("  Skill registry not available.\n");
+                eprintlf!("  Skill registry not available.");
             }
             CommandResult::Continue
         }
         "/tasks" => {
             let tasks = engine.task_store.list();
             if tasks.is_empty() {
-                eprintln!("  No active tasks.\n");
+                eprintlf!("  No active tasks.");
             } else {
-                eprintln!("\n  Tasks:");
+                eprintlf!("\r\n  Tasks:");
                 for t in &tasks {
                     let icon = match t.status {
                         venus_core::task::TaskStatus::Pending => "○",
@@ -328,9 +343,9 @@ pub async fn handle_command(
                         venus_core::task::TaskStatus::Completed => "●",
                         venus_core::task::TaskStatus::Deleted => "✗",
                     };
-                    eprintln!("    {} {} - {}", icon, t.id, t.subject);
+                    eprintlf!("    {} {} - {}", icon, t.id, t.subject);
                 }
-                eprintln!();
+                eprintlf!();
             }
             CommandResult::Continue
         }
@@ -338,7 +353,7 @@ pub async fn handle_command(
             let current = engine.plan_mode.load(std::sync::atomic::Ordering::Relaxed);
             let new_val = !current;
             engine.plan_mode.store(new_val, std::sync::atomic::Ordering::Relaxed);
-            eprintln!("  Plan mode: {}\n", if new_val { "ON" } else { "OFF" });
+            eprintlf!("  Plan mode: {}", if new_val { "ON" } else { "OFF" });
             CommandResult::Continue
         }
         "/vim" => {
@@ -348,12 +363,12 @@ pub async fn handle_command(
             if let Some(level) = parts.get(1) {
                 match level.trim() {
                     "low" | "medium" | "high" | "max" => {
-                        eprintln!("  Effort level set to: {}\n", level.trim());
+                        eprintlf!("  Effort level set to: {}", level.trim());
                     }
-                    _ => eprintln!("  Usage: /effort [low|medium|high|max]\n"),
+                    _ => eprintlf!("  Usage: /effort [low|medium|high|max]"),
                 }
             } else {
-                eprintln!("  Usage: /effort [low|medium|high|max]\n");
+                eprintlf!("  Usage: /effort [low|medium|high|max]");
             }
             CommandResult::Continue
         }
@@ -378,38 +393,38 @@ pub async fn handle_command(
                             let _ = stdin.write_all(text.as_bytes());
                         }
                         let _ = child.wait();
-                        eprintln!("  Copied to clipboard.\n");
+                        eprintlf!("  Copied to clipboard.");
                     }
                 }
                 #[cfg(not(target_os = "macos"))]
-                eprintln!("  Clipboard not available on this platform.\n");
+                eprintlf!("  Clipboard not available on this platform.");
             } else {
-                eprintln!("  No assistant message to copy.\n");
+                eprintlf!("  No assistant message to copy.");
             }
             CommandResult::Continue
         }
         "/version" => {
-            eprintln!("  Venus v{}", env!("CARGO_PKG_VERSION"));
-            eprintln!("  Model: {}", engine.model);
-            eprintln!();
+            eprintlf!("  Venus v{}", env!("CARGO_PKG_VERSION"));
+            eprintlf!("  Model: {}", engine.model);
+            eprintlf!();
             CommandResult::Continue
         }
         "/status" => {
             let uptime = chrono::Utc::now().timestamp() as u64 - engine.created_at;
             let cost = engine.cost_tracker.lock().unwrap().format_cost();
             let msg_count = engine.messages.lock().await.len();
-            eprintln!("\n  Session status:");
-            eprintln!("    Uptime:     {}s", uptime);
-            eprintln!("    Messages:   {}", msg_count);
-            eprintln!("    Cost:       {}", cost);
-            eprintln!("    Model:      {}", engine.model);
-            eprintln!("    Plan mode:  {}", engine.plan_mode.load(std::sync::atomic::Ordering::Relaxed));
-            eprintln!();
+            eprintlf!("\r\n  Session status:");
+            eprintlf!("    Uptime:     {}s", uptime);
+            eprintlf!("    Messages:   {}", msg_count);
+            eprintlf!("    Cost:       {}", cost);
+            eprintlf!("    Model:      {}", engine.model);
+            eprintlf!("    Plan mode:  {}", engine.plan_mode.load(std::sync::atomic::Ordering::Relaxed));
+            eprintlf!();
             CommandResult::Continue
         }
         "/summary" => {
             if engine.messages.lock().await.len() < 4 {
-                eprintln!("  Not enough messages to summarize.\n");
+                eprintlf!("  Not enough messages to summarize.");
                 return CommandResult::Continue;
             }
             CommandResult::InjectMessage(
@@ -425,10 +440,10 @@ pub async fn handle_command(
             drop(messages);
             match serde_json::to_string_pretty(&values) {
                 Ok(json) => match std::fs::write(path, &json) {
-                    Ok(()) => eprintln!("  Exported {} messages to {}\n", values.len(), path),
-                    Err(e) => eprintln!("  Error writing {}: {}\n", path, e),
+                    Ok(()) => eprintlf!("  Exported {} messages to {}", values.len(), path),
+                    Err(e) => eprintlf!("  Error writing {}: {}", path, e),
                 },
-                Err(e) => eprintln!("  Error serializing: {}\n", e),
+                Err(e) => eprintlf!("  Error serializing: {}", e),
             }
             CommandResult::Continue
         }
@@ -438,42 +453,42 @@ pub async fn handle_command(
             let total = messages.len();
             let remove = (n * 2).min(total);
             if remove == 0 {
-                eprintln!("  Nothing to rewind.\n");
+                eprintlf!("  Nothing to rewind.");
             } else {
                 messages.drain((total - remove)..);
-                eprintln!("  Rewound {} messages.\n", remove);
+                eprintlf!("  Rewound {} messages.", remove);
             }
             CommandResult::Continue
         }
         "/permissions" => {
             let mode = engine.settings.permission_mode.as_deref().unwrap_or("default");
-            eprintln!("\n  Permission mode: {}", mode);
+            eprintlf!("\r\n  Permission mode: {}", mode);
             if let Some(ref allow) = engine.settings.always_allow {
                 for rule in allow {
-                    eprintln!("    ALLOW  {}:{}", rule.tool, rule.pattern.as_deref().unwrap_or("*"));
+                    eprintlf!("    ALLOW  {}:{}", rule.tool, rule.pattern.as_deref().unwrap_or("*"));
                 }
             }
             if let Some(ref deny) = engine.settings.always_deny {
                 for rule in deny {
-                    eprintln!("    DENY   {}:{}", rule.tool, rule.pattern.as_deref().unwrap_or("*"));
+                    eprintlf!("    DENY   {}:{}", rule.tool, rule.pattern.as_deref().unwrap_or("*"));
                 }
             }
-            eprintln!();
+            eprintlf!();
             CommandResult::Continue
         }
         "/mcp" => {
             if let Some(ref servers) = engine.settings.mcp_servers {
                 if servers.is_empty() {
-                    eprintln!("  No MCP servers configured.\n");
+                    eprintlf!("  No MCP servers configured.");
                 } else {
-                    eprintln!("\n  MCP servers:");
+                    eprintlf!("\r\n  MCP servers:");
                     for (name, config) in servers {
-                        eprintln!("    {} - {} ({})", name, config.command, config.transport);
+                        eprintlf!("    {} - {} ({})", name, config.command, config.transport);
                     }
-                    eprintln!();
+                    eprintlf!();
                 }
             } else {
-                eprintln!("  No MCP servers configured.\n");
+                eprintlf!("  No MCP servers configured.");
             }
             CommandResult::Continue
         }
@@ -484,7 +499,7 @@ pub async fn handle_command(
                 .and_then(|r| r.find(skill_name))
                 .filter(|s| s.user_invocable)
             {
-                eprintln!("  Invoking skill: {}", skill.name);
+                eprintlf!("  Invoking skill: {}", skill.name);
                 let content = if let Some(args) = parts.get(1) {
                     format!("{}\n\nArguments: {}", skill.content, args)
                 } else {
@@ -493,8 +508,8 @@ pub async fn handle_command(
                 return CommandResult::InjectMessage(content);
             }
 
-            eprintln!("  Unknown command: {}", cmd);
-            eprintln!("  Type /help for available commands\n");
+            eprintlf!("  Unknown command: {}", cmd);
+            eprintlf!("  Type /help for available commands");
             CommandResult::Continue
         }
     }
@@ -502,7 +517,7 @@ pub async fn handle_command(
 
 /// Run `git diff` and `git diff --staged` in the working directory and display output.
 async fn handle_diff(engine: &QueryEngine) {
-    eprintln!();
+    eprintlf!();
 
     // Unstaged changes
     match tokio::process::Command::new("git")
@@ -514,16 +529,16 @@ async fn handle_diff(engine: &QueryEngine) {
         Ok(output) => {
             let stdout = String::from_utf8_lossy(&output.stdout);
             if stdout.is_empty() {
-                eprintln!("  No unstaged changes.");
+                eprintlf!("  No unstaged changes.");
             } else {
-                eprintln!("  \x1b[1mUnstaged changes:\x1b[0m");
+                eprintlf!("  \x1b[1mUnstaged changes:\x1b[0m");
                 for line in stdout.lines() {
-                    eprintln!("  {}", line);
+                    eprintlf!("  {}", line);
                 }
             }
         }
         Err(e) => {
-            eprintln!("  \x1b[31mFailed to run git diff: {}\x1b[0m", e);
+            eprintlf!("  \x1b[31mFailed to run git diff: {}\x1b[0m", e);
         }
     }
 
@@ -537,20 +552,20 @@ async fn handle_diff(engine: &QueryEngine) {
         Ok(output) => {
             let stdout = String::from_utf8_lossy(&output.stdout);
             if stdout.is_empty() {
-                eprintln!("  No staged changes.");
+                eprintlf!("  No staged changes.");
             } else {
-                eprintln!("\n  \x1b[1mStaged changes:\x1b[0m");
+                eprintlf!("\r\n  \x1b[1mStaged changes:\x1b[0m");
                 for line in stdout.lines() {
-                    eprintln!("  {}", line);
+                    eprintlf!("  {}", line);
                 }
             }
         }
         Err(e) => {
-            eprintln!("  \x1b[31mFailed to run git diff --staged: {}\x1b[0m", e);
+            eprintlf!("  \x1b[31mFailed to run git diff --staged: {}\x1b[0m", e);
         }
     }
 
-    eprintln!();
+    eprintlf!();
 }
 
 /// Compact conversation using AI summarization, with fallback to naive truncation.
@@ -558,11 +573,11 @@ async fn handle_compact(engine: &QueryEngine) {
     let total = engine.messages.lock().await.len();
 
     if total <= 4 {
-        eprintln!("\n  Conversation has {} messages, nothing to compact.\n", total);
+        eprintlf!("\r\n  Conversation has {} messages, nothing to compact.", total);
         return;
     }
 
-    eprintln!("\n  Compacting conversation ({} messages)...", total);
+    eprintlf!("\r\n  Compacting conversation ({} messages)...", total);
 
     let config = venus_core::compact::CompactConfig::from_engine(
         &engine.model,
@@ -581,19 +596,19 @@ async fn handle_compact(engine: &QueryEngine) {
     .await
     {
         Ok(result) => {
-            eprintln!(
-                "  Compacted: {} -> {} messages (~{} tokens saved)\n",
+            eprintlf!(
+                "  Compacted: {} -> {} messages (~{} tokens saved)",
                 result.messages_before, result.messages_after, result.tokens_saved_estimate,
             );
         }
         Err(e) => {
-            eprintln!("  AI summarization failed: {}", e);
+            eprintlf!("  AI summarization failed: {}", e);
             // Fallback to naive compaction
             let keep = 10.min(total);
             let removed = total - keep;
             messages.drain(..removed);
-            eprintln!(
-                "  Fell back to keeping last {} messages (removed {}).\n",
+            eprintlf!(
+                "  Fell back to keeping last {} messages (removed {}).",
                 keep, removed
             );
         }
@@ -613,31 +628,31 @@ async fn handle_config(engine: &QueryEngine) {
     let provider_name = engine.settings.active_provider.as_deref().unwrap_or("(none)");
     let provider_type = engine.settings.provider_type();
 
-    eprintln!("\n  \x1b[1mConfiguration:\x1b[0m");
-    eprintln!("    Provider:          {} ({})", provider_name, provider_type);
-    eprintln!("    Model:             {}", engine.model);
-    eprintln!("    Base URL:          {}", engine.base_url);
-    eprintln!("    Working dir:       {}", engine.working_dir.display());
-    eprintln!("    Permission mode:   {}", permission_mode);
-    eprintln!("    Max tokens:        {}", engine.max_tokens);
-    eprintln!("    Max turns:         {}", engine.max_turns);
+    eprintlf!("\r\n  \x1b[1mConfiguration:\x1b[0m");
+    eprintlf!("    Provider:          {} ({})", provider_name, provider_type);
+    eprintlf!("    Model:             {}", engine.model);
+    eprintlf!("    Base URL:          {}", engine.base_url);
+    eprintlf!("    Working dir:       {}", engine.working_dir.display());
+    eprintlf!("    Permission mode:   {}", permission_mode);
+    eprintlf!("    Max tokens:        {}", engine.max_tokens);
+    eprintlf!("    Max turns:         {}", engine.max_turns);
     if let Some(budget) = engine.budget_usd {
-        eprintln!("    Budget:            ${:.2}", budget);
+        eprintlf!("    Budget:            ${:.2}", budget);
     }
     if let Some(ref thinking) = engine.settings.thinking {
-        eprintln!("    Thinking:          {}", thinking.mode.as_deref().unwrap_or("default"));
+        eprintlf!("    Thinking:          {}", thinking.mode.as_deref().unwrap_or("default"));
     }
     if let Some(ref allow) = engine.settings.always_allow {
-        eprintln!("    Allow rules:       {}", allow.len());
+        eprintlf!("    Allow rules:       {}", allow.len());
     }
     if let Some(ref deny) = engine.settings.always_deny {
-        eprintln!("    Deny rules:        {}", deny.len());
+        eprintlf!("    Deny rules:        {}", deny.len());
     }
     if let Some(ref mcp) = engine.settings.mcp_servers {
-        eprintln!("    MCP servers:       {}", mcp.len());
+        eprintlf!("    MCP servers:       {}", mcp.len());
     }
-    eprintln!(
-        "    Token usage:       {} input, {} output\n",
+    eprintlf!(
+        "    Token usage:       {} input, {} output",
         total_usage.input_tokens + total_usage.cache_read_tokens,
         total_usage.output_tokens
     );
@@ -645,7 +660,7 @@ async fn handle_config(engine: &QueryEngine) {
 
 /// Run environment diagnostics, checking for required tools and config.
 async fn handle_doctor(engine: &QueryEngine) {
-    eprintln!("\n  \x1b[1mEnvironment diagnostics:\x1b[0m");
+    eprintlf!("\r\n  \x1b[1mEnvironment diagnostics:\x1b[0m");
 
     // Check git
     let git_ok = check_command("git", &["--version"], &engine.working_dir).await;
@@ -666,7 +681,7 @@ async fn handle_doctor(engine: &QueryEngine) {
         .unwrap_or(false);
     print_check("~/.venus/config.toml", config_exists);
 
-    eprintln!();
+    eprintlf!();
 }
 
 /// Display rich context analysis with token breakdown.
@@ -685,71 +700,71 @@ async fn handle_context(engine: &QueryEngine) {
         0
     };
 
-    eprintln!("\n  \x1b[1mContext info:\x1b[0m");
-    eprintln!("    Model:               {}", engine.model);
-    eprintln!("    Context window:      {} tokens", window);
-    eprintln!("    Auto-compact at:     {} tokens", threshold);
-    eprintln!("    Messages:            {}", analysis.message_count);
-    eprintln!("    Turns:               {}", analysis.turn_count);
-    eprintln!("    Usage:               ~{}% of context window", usage_pct);
-    eprintln!();
-    eprintln!("    \x1b[1mToken breakdown (estimated):\x1b[0m");
-    eprintln!("      System prompt:     {}", analysis.system_prompt_tokens);
-    eprintln!("      User text:         {}", analysis.user_text_tokens);
-    eprintln!("      Assistant text:    {}", analysis.assistant_text_tokens);
-    eprintln!(
+    eprintlf!("\r\n  \x1b[1mContext info:\x1b[0m");
+    eprintlf!("    Model:               {}", engine.model);
+    eprintlf!("    Context window:      {} tokens", window);
+    eprintlf!("    Auto-compact at:     {} tokens", threshold);
+    eprintlf!("    Messages:            {}", analysis.message_count);
+    eprintlf!("    Turns:               {}", analysis.turn_count);
+    eprintlf!("    Usage:               ~{}% of context window", usage_pct);
+    eprintlf!();
+    eprintlf!("    \x1b[1mToken breakdown (estimated):\x1b[0m");
+    eprintlf!("      System prompt:     {}", analysis.system_prompt_tokens);
+    eprintlf!("      User text:         {}", analysis.user_text_tokens);
+    eprintlf!("      Assistant text:    {}", analysis.assistant_text_tokens);
+    eprintlf!(
         "      Tool requests:     {}",
         analysis.tool_request_tokens.values().sum::<u64>()
     );
-    eprintln!(
+    eprintlf!(
         "      Tool results:      {}",
         analysis.tool_result_tokens.values().sum::<u64>()
     );
-    eprintln!("      Thinking:          {}", analysis.thinking_tokens);
-    eprintln!("      \x1b[1mTotal:             {}\x1b[0m", analysis.total_tokens);
+    eprintlf!("      Thinking:          {}", analysis.thinking_tokens);
+    eprintlf!("      \x1b[1mTotal:             {}\x1b[0m", analysis.total_tokens);
 
     // Show per-tool breakdown if there are tool results
     if !analysis.tool_result_tokens.is_empty() {
-        eprintln!();
-        eprintln!("    \x1b[1mTool result tokens:\x1b[0m");
+        eprintlf!();
+        eprintlf!("    \x1b[1mTool result tokens:\x1b[0m");
         let mut sorted: Vec<_> = analysis.tool_result_tokens.iter().collect();
         sorted.sort_by(|a, b| b.1.cmp(a.1));
         for (name, tokens) in sorted {
-            eprintln!("      {:<20} {}", name, tokens);
+            eprintlf!("      {:<20} {}", name, tokens);
         }
     }
 
     if !analysis.duplicate_file_reads.is_empty() {
-        eprintln!();
-        eprintln!("    \x1b[33mDuplicate file reads:\x1b[0m");
+        eprintlf!();
+        eprintlf!("    \x1b[33mDuplicate file reads:\x1b[0m");
         for (path, count) in &analysis.duplicate_file_reads {
-            eprintln!("      {} ({}x)", path, count);
+            eprintlf!("      {} ({}x)", path, count);
         }
     }
 
-    eprintln!();
+    eprintlf!();
 }
 
 /// Display detailed per-model token breakdown.
 fn handle_tokens(engine: &QueryEngine) {
-    eprintln!("\n  \x1b[1mToken breakdown:\x1b[0m");
+    eprintlf!("\r\n  \x1b[1mToken breakdown:\x1b[0m");
 
     let tracker = engine.cost_tracker.lock().unwrap();
     if tracker.usage_by_model.is_empty() {
-        eprintln!("    No token usage recorded yet.\n");
+        eprintlf!("    No token usage recorded yet.");
         return;
     }
 
     for (model, usage) in &tracker.usage_by_model {
-        eprintln!("    \x1b[33m{}\x1b[0m", model);
-        eprintln!("      Input tokens:          {}", usage.input_tokens);
-        eprintln!("      Output tokens:         {}", usage.output_tokens);
-        eprintln!("      Cache read tokens:     {}", usage.cache_read_tokens);
-        eprintln!("      Cache creation tokens: {}", usage.cache_creation_tokens);
+        eprintlf!("    \x1b[33m{}\x1b[0m", model);
+        eprintlf!("      Input tokens:          {}", usage.input_tokens);
+        eprintlf!("      Output tokens:         {}", usage.output_tokens);
+        eprintlf!("      Cache read tokens:     {}", usage.cache_read_tokens);
+        eprintlf!("      Cache creation tokens: {}", usage.cache_creation_tokens);
     }
 
     let cost = tracker.format_cost();
-    eprintln!("\n    Total cost: {}\n", cost);
+    eprintlf!("\r\n    Total cost: {}", cost);
 }
 
 /// Check if a command is available by running it.
@@ -772,7 +787,7 @@ fn print_check(label: &str, ok: bool) {
     } else {
         "\x1b[31mfail\x1b[0m"
     };
-    eprintln!("    [{}] {}", icon, label);
+    eprintlf!("    [{}] {}", icon, label);
 }
 
 /// Resolve ~/.claude/<filename> path.
@@ -795,89 +810,90 @@ async fn handle_plugins() {
 
     let mut registry = venus_core::plugin_registry::PluginRegistry::new();
     if let Err(e) = registry.load_all(&plugin_dirs).await {
-        eprintln!("  Error loading plugins: {}\n", e);
+        eprintlf!("  Error loading plugins: {}", e);
         return;
     }
 
     let plugins = registry.all_plugins();
     if plugins.is_empty() {
-        eprintln!(
-            "\n  No plugins installed.\n\n  Place plugins in ~/.venus/plugins/ or ./.venus/plugins/.\n  Each plugin directory must contain a plugin.json manifest.\n"
-        );
+        let stderr = io::stderr();
+        let mut out = stderr.lock();
+        let _ = write!(out, "\r\n  No plugins installed.\r\n\r\n  Place plugins in ~/.venus/plugins/ or ./.venus/plugins/.\r\n  Each plugin directory must contain a plugin.json manifest.\r\n\r\n");
         return;
     }
 
-    eprintln!("\n  \x1b[1mInstalled plugins:\x1b[0m");
+    eprintlf!("\r\n  \x1b[1mInstalled plugins:\x1b[0m");
     for plugin in plugins {
         let desc = plugin
             .manifest
             .description
             .as_deref()
             .unwrap_or("(no description)");
-        eprintln!(
+        eprintlf!(
             "    \x1b[33m{}\x1b[0m v{} - {}",
             plugin.manifest.name, plugin.manifest.version, desc
         );
         if !plugin.manifest.tools.is_empty() {
             let tool_names: Vec<&str> =
                 plugin.manifest.tools.iter().map(|t| t.name.as_str()).collect();
-            eprintln!("      Tools: {}", tool_names.join(", "));
+            eprintlf!("      Tools: {}", tool_names.join(", "));
         }
         if !plugin.manifest.mcp_servers.is_empty() {
             let server_names: Vec<&str> = plugin.manifest.mcp_servers.keys().map(|s| s.as_str()).collect();
-            eprintln!("      MCP servers: {}", server_names.join(", "));
+            eprintlf!("      MCP servers: {}", server_names.join(", "));
         }
         if !plugin.manifest.commands.is_empty() {
             let cmd_names: Vec<&str> =
                 plugin.manifest.commands.iter().map(|c| c.name.as_str()).collect();
-            eprintln!("      Commands: {}", cmd_names.join(", "));
+            eprintlf!("      Commands: {}", cmd_names.join(", "));
         }
     }
-    eprintln!();
+    eprintlf!();
 }
 
 fn print_help() {
-    eprintln!(
-        r#"
-  Available commands:
-    /help, /h       Show this help
-    /exit, /quit    Exit the REPL
-    /clear          Clear conversation history
-    /cost           Show token usage and cost
-    /model [name]   Show or change model
-    /history        Show conversation message count
-    /diff           Show git diff (staged + unstaged)
-    /compact        Compact conversation with AI summarization
-    /config         Show current configuration
-    /doctor         Run environment diagnostics
-    /context        Show context info
-    /tokens         Show detailed token breakdown
-    /plugin         List installed plugins
-    /sessions       List all saved sessions
-    /resume [n|id]  Resume a previous session
-    /commit         Generate conventional commit from staged changes
-    /review         Review code changes for issues
-    /init           Create VENUS.md for this project
-    /memory [list]  List memory entries
-    /skills         List loaded skills
-    /tasks          List active tasks
-    /plan           Toggle plan mode
-    /vim            Toggle vim mode (pending)
-    /effort [level] Set effort level (low/medium/high/max)
-    /copy           Copy last assistant message to clipboard
-    /version        Show version and model info
-    /status         Show session status
-    /summary        Summarize conversation
-    /export [path]  Export conversation to JSON
-    /rewind [n]     Rewind n message pairs
-    /permissions    Show permission rules
-    /mcp            Show MCP server config
-
-  Keyboard:
-    Ctrl+C          Abort current query
-    Ctrl+D          Exit
-"#
-    );
+    let stderr = io::stderr();
+    let mut out = stderr.lock();
+    let help = "\
+\r\n  Available commands:\
+\r\n    /help, /h       Show this help\
+\r\n    /exit, /quit    Exit the REPL\
+\r\n    /clear          Clear conversation history\
+\r\n    /cost           Show token usage and cost\
+\r\n    /model [name]   Show or change model\
+\r\n    /history        Show conversation message count\
+\r\n    /diff           Show git diff (staged + unstaged)\
+\r\n    /compact        Compact conversation with AI summarization\
+\r\n    /config         Show current configuration\
+\r\n    /doctor         Run environment diagnostics\
+\r\n    /context        Show context info\
+\r\n    /tokens         Show detailed token breakdown\
+\r\n    /plugin         List installed plugins\
+\r\n    /sessions       List all saved sessions\
+\r\n    /resume [n|id]  Resume a previous session\
+\r\n    /commit         Generate conventional commit from staged changes\
+\r\n    /review         Review code changes for issues\
+\r\n    /init           Create VENUS.md for this project\
+\r\n    /memory [list]  List memory entries\
+\r\n    /skills         List loaded skills\
+\r\n    /tasks          List active tasks\
+\r\n    /plan           Toggle plan mode\
+\r\n    /vim            Toggle vim mode (pending)\
+\r\n    /effort [level] Set effort level (low/medium/high/max)\
+\r\n    /copy           Copy last assistant message to clipboard\
+\r\n    /version        Show version and model info\
+\r\n    /status         Show session status\
+\r\n    /summary        Summarize conversation\
+\r\n    /export [path]  Export conversation to JSON\
+\r\n    /rewind [n]     Rewind n message pairs\
+\r\n    /permissions    Show permission rules\
+\r\n    /mcp            Show MCP server config\
+\r\n\
+\r\n  Keyboard:\
+\r\n    Ctrl+C          Abort current query\
+\r\n    Ctrl+D          Exit\
+\r\n";
+    let _ = write!(out, "{}", help);
 }
 
 async fn get_staged_diff(working_dir: &std::path::Path) -> String {

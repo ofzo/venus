@@ -1,3 +1,4 @@
+use std::io::{self, Write};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -7,6 +8,20 @@ use venus_core::hooks::events::HookEvent;
 use venus_core::message::ContentBlock;
 use venus_core::skill::SkillRegistry;
 use venus_utils::session::{self, SessionMeta};
+
+/// Print a line to stderr using \r\n (required for raw-mode terminal).
+macro_rules! eprintlf {
+    () => {
+        let stderr = io::stderr();
+        let mut out = stderr.lock();
+        let _ = write!(out, "\r\n");
+    };
+    ($($arg:tt)*) => {{
+        let stderr = io::stderr();
+        let mut out = stderr.lock();
+        let _ = write!(out, "{}\r\n", format_args!($($arg)*));
+    }};
+}
 
 use crate::commands::{self, CommandResult};
 use crate::input;
@@ -79,12 +94,12 @@ pub async fn run_repl(engine: &mut QueryEngine, skill_registry: Option<Arc<Skill
                                 CommandResult::InjectMessage(msg) => {
                                     match submit_and_render(engine, &msg).await {
                                         Ok(_) => save_current_session(engine).await,
-                                        Err(e) => eprintln!("\x1b[31mError: {}\x1b[0m", e),
+                                        Err(e) => eprintlf!("\x1b[31mError: {}\x1b[0m", e),
                                     }
                                 }
                                 CommandResult::ToggleVim => {
                                     vim_tx.send(true).ok();
-                                    eprintln!("  Vim mode toggled.\n");
+                                    eprintlf!("  Vim mode toggled.");
                                 }
                                 CommandResult::Continue => {}
                             }
@@ -96,21 +111,21 @@ pub async fn run_repl(engine: &mut QueryEngine, skill_registry: Option<Arc<Skill
                                 save_current_session(engine).await;
                             }
                             Err(e) => {
-                                eprintln!("\x1b[31mError: {}\x1b[0m", e);
+                                eprintlf!("\x1b[31mError: {}\x1b[0m", e);
                             }
                         }
                     }
                     Some(None) | None => {
                         // EOF or channel closed
-                        eprintln!("\nGoodbye!");
+                        eprintlf!("\r\nGoodbye!");
                         break;
                     }
                 }
             }
             Some(cron_prompt) = cron_rx.recv() => {
-                eprintln!("\n  [cron] Executing scheduled prompt...");
+                eprintlf!("\r\n  [cron] Executing scheduled prompt...");
                 if let Err(e) = submit_and_render(engine, &cron_prompt).await {
-                    eprintln!("\x1b[31mCron error: {}\x1b[0m", e);
+                    eprintlf!("\x1b[31mCron error: {}\x1b[0m", e);
                 }
                 save_current_session(engine).await;
             }
@@ -138,7 +153,7 @@ async fn submit_and_render(engine: &QueryEngine, input: &str) -> Result<()> {
     if let Ok(resp) = engine.hook_runner.run_user_prompt_submit(input).await {
         if resp.deny == Some(true) {
             let reason = resp.reason.unwrap_or_default();
-            eprintln!(
+            eprintlf!(
                 "  \x1b[33mBlocked by hook: {}\x1b[0m",
                 if reason.is_empty() {
                     "denied"

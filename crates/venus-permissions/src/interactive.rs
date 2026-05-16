@@ -114,21 +114,24 @@ impl PermissionHandler for InteractivePermissionHandler {
 /// Interactive y/n prompt via crossterm key events.
 fn prompt_user(tool_name: &str, input: &Value) -> PermissionDecision {
     let description = format_tool_description(tool_name, input);
-    eprint!(
-        "\n  Tool: {}\n  {}\n  Allow? (y/n): ",
+    let stderr = std::io::stderr();
+    let mut out = stderr.lock();
+    let _ = write!(
+        out,
+        "\r\n  Tool: {}\r\n  {}\r\n  Allow? (y/n): ",
         tool_name, description
     );
-    std::io::stderr().flush().ok();
+    let _ = out.flush();
 
     loop {
         if let Ok(Event::Key(KeyEvent { code, .. })) = event::read() {
             match code {
                 KeyCode::Char('y') | KeyCode::Char('Y') => {
-                    eprintln!("y");
+                    let _ = write!(out, "y\r\n");
                     return PermissionDecision::Allow;
                 }
                 KeyCode::Char('n') | KeyCode::Char('N') => {
-                    eprintln!("n");
+                    let _ = write!(out, "n\r\n");
                     return PermissionDecision::Deny("user denied".to_string());
                 }
                 _ => continue,

@@ -136,7 +136,8 @@ impl MarkdownRenderer {
         }
     }
 
-    /// Feed a thinking text delta. Buffered by line and output wrapped + dimmed.
+    /// Feed a thinking text delta. Buffered and output wrapped + dimmed.
+    /// Flushes on newlines or when the buffer exceeds a threshold.
     pub fn push_thinking(&mut self, text: &str) {
         self.was_thinking = true;
         let stderr = io::stderr();
@@ -149,6 +150,21 @@ impl MarkdownRenderer {
                 let _ = write!(out, "\x1b[2m{}\x1b[0m{}", wrapped, NL);
             } else {
                 self.thinking_buf.push(ch);
+                // Flush mid-line when buffer display width exceeds terminal
+                if display_width(&self.thinking_buf) >= self.term_width {
+                    // Try to break at the last space to avoid splitting words
+                    let buf = &self.thinking_buf;
+                    let last_space = buf.rfind(' ').unwrap_or(0);
+                    let (flush, remainder) = if last_space > 0 {
+                        let (a, b) = buf.split_at(last_space + 1);
+                        (a.to_string(), b.to_string())
+                    } else {
+                        (std::mem::take(&mut self.thinking_buf), String::new())
+                    };
+                    self.thinking_buf = remainder;
+                    let wrapped = wrap_line(&flush, self.term_width, 0);
+                    let _ = write!(out, "\x1b[2m{}\x1b[0m{}", wrapped, NL);
+                }
             }
         }
     }
@@ -165,7 +181,9 @@ impl MarkdownRenderer {
             self.was_thinking = false;
             let stderr = io::stderr();
             let mut out = stderr.lock();
-            let _ = write!(out, "{}", NL);
+            // Visual separator between thinking and response
+            let sep_width = self.term_width.min(40);
+            let _ = write!(out, "\x1b[2m{}\x1b[0m{}", "─".repeat(sep_width), NL);
         }
     }
 
@@ -321,6 +339,9 @@ impl MarkdownRenderer {
             None
         };
 
+        // Blank line before code block for visual separation
+        let _ = write!(out, "{}", NL);
+
         if !lang.is_empty() {
             let _ = write!(out, "\x1b[2;36m  ╭─ {}\x1b[0m{}", lang, NL);
         } else {
@@ -356,6 +377,8 @@ impl MarkdownRenderer {
         }
 
         let _ = write!(out, "\x1b[2;36m  ╰─\x1b[0m{}", NL);
+        // Blank line after code block for visual separation
+        let _ = write!(out, "{}", NL);
     }
 }
 

@@ -6,8 +6,23 @@ mod repl;
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
+
+/// Print a line to stderr using \r\n (required for raw-mode terminal).
+macro_rules! eprintlf {
+    () => {
+        let stderr = io::stderr();
+        let mut out = stderr.lock();
+        let _ = write!(out, "\r\n");
+    };
+    ($($arg:tt)*) => {{
+        let stderr = io::stderr();
+        let mut out = stderr.lock();
+        let _ = write!(out, "{}\r\n", format_args!($($arg)*));
+    }};
+}
 
 use venus_core::background::BackgroundTaskRuntime;
 use venus_core::engine::QueryEngine;
@@ -227,7 +242,7 @@ async fn main() -> Result<()> {
     ];
     let mut plugin_registry = venus_core::plugin_registry::PluginRegistry::new();
     if let Err(e) = plugin_registry.load_all(&plugin_dirs).await {
-        eprintln!("Warning: failed to load plugins: {}", e);
+        eprintlf!("Warning: failed to load plugins: {}", e);
     }
     // Add plugin tools to the tool list
     for plugin in plugin_registry.all_plugins() {
@@ -248,7 +263,7 @@ async fn main() -> Result<()> {
                     Some(manager)
                 }
                 Err(e) => {
-                    eprintln!("Warning: failed to start MCP servers: {}", e);
+                    eprintlf!("Warning: failed to start MCP servers: {}", e);
                     None
                 }
             }
@@ -300,7 +315,7 @@ async fn main() -> Result<()> {
                 *engine.messages.lock().await = messages;
                 engine.session_id = meta.id.clone();
                 engine.created_at = meta.created_at;
-                eprintln!(
+                eprintlf!(
                     "Resumed session {} ({} messages)",
                     &meta.id[..8.min(meta.id.len())],
                     msg_count,
@@ -317,14 +332,14 @@ async fn main() -> Result<()> {
                         *engine.messages.lock().await = messages;
                         engine.session_id = meta.id.clone();
                         engine.created_at = meta.created_at;
-                        eprintln!(
+                        eprintlf!(
                             "Resumed session {} ({} messages)",
                             &meta.id[..8.min(meta.id.len())],
                             msg_count,
                         );
                     }
                     _ => {
-                        eprintln!("Warning: could not resume session '{}': {}", resume_id, e);
+                        eprintlf!("Warning: could not resume session '{}': {}", resume_id, e);
                     }
                 }
             }
@@ -346,22 +361,22 @@ async fn main() -> Result<()> {
                             *engine.messages.lock().await = messages;
                             engine.session_id = meta.id.clone();
                             engine.created_at = meta.created_at;
-                            eprintln!(
+                            eprintlf!(
                                 "Continued session {} ({} messages)",
                                 &meta.id[..8.min(meta.id.len())],
                                 msg_count,
                             );
                         }
                         Err(e) => {
-                            eprintln!("Warning: failed to load latest session: {}", e);
+                            eprintlf!("Warning: failed to load latest session: {}", e);
                         }
                     }
                 } else {
-                    eprintln!("No saved sessions to continue.");
+                    eprintlf!("No saved sessions to continue.");
                 }
             }
             Err(e) => {
-                eprintln!("Warning: failed to list sessions: {}", e);
+                eprintlf!("Warning: failed to list sessions: {}", e);
             }
         }
     }

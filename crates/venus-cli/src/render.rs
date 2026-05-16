@@ -39,7 +39,7 @@ pub fn render_event(event: &StreamEvent, md: &mut MarkdownRenderer) {
         StreamEvent::ToolUseStart { name, .. } => {
             let stderr = io::stderr();
             let mut out = stderr.lock();
-            let _ = write!(out, "{}\x1b[36m  [Tool: {}]\x1b[0m{}", NL, name, NL);
+            let _ = write!(out, "{}\x1b[1;36m  > {}\x1b[0m{}", NL, name, NL);
         }
         StreamEvent::ToolUseInput(_) => {}
         StreamEvent::ToolResult { name, result, .. } => {
@@ -50,7 +50,7 @@ pub fn render_event(event: &StreamEvent, md: &mut MarkdownRenderer) {
             } else {
                 "\x1b[32mdone\x1b[0m"
             };
-            let _ = write!(out, "  \x1b[36m[{}: {}]\x1b[0m{}", name, status, NL);
+            let _ = write!(out, "  \x1b[36m{}\x1b[0m {}{}", name, status, NL);
 
             for block in &result.content {
                 if let venus_core::message::ContentBlock::Text { text } = block {
@@ -60,10 +60,11 @@ pub fn render_event(event: &StreamEvent, md: &mut MarkdownRenderer) {
                         text.clone()
                     };
                     for line in display.lines() {
-                        let _ = write!(out, "  \x1b[2m{}\x1b[0m{}", line, NL);
+                        let _ = write!(out, "    \x1b[2m{}\x1b[0m{}", line, NL);
                     }
                 }
             }
+            let _ = write!(out, "{}", NL);
         }
         StreamEvent::MessageComplete(_) => {
             md.finish();
