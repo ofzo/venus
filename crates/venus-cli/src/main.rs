@@ -183,9 +183,9 @@ async fn main() -> Result<()> {
     let skill_dirs = vec![
         dirs::home_dir()
             .unwrap_or_default()
-            .join(".claude")
+            .join(".venus")
             .join("skills"),
-        working_dir.join(".claude").join("skills"),
+        working_dir.join(".venus").join("skills"),
     ];
     let skill_registry = Arc::new(
         SkillRegistry::load_from_dirs(&skill_dirs)
@@ -203,9 +203,9 @@ async fn main() -> Result<()> {
     let plugin_dirs = vec![
         dirs::home_dir()
             .unwrap_or_default()
-            .join(".claude")
+            .join(".venus")
             .join("plugins"),
-        working_dir.join(".claude").join("plugins"),
+        working_dir.join(".venus").join("plugins"),
     ];
     let mut plugin_registry = venus_core::plugin_registry::PluginRegistry::new();
     if let Err(e) = plugin_registry.load_all(&plugin_dirs).await {

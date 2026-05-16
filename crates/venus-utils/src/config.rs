@@ -160,7 +160,7 @@ impl Settings {
         let mut settings = Settings::default();
 
         // 1. Global settings (~/.claude/settings.json)
-        if let Ok(config_dir) = fs_helpers::claude_config_dir() {
+        if let Ok(config_dir) = fs_helpers::venus_config_dir() {
             let settings_path = config_dir.join("settings.json");
             if settings_path.exists() {
                 let content = std::fs::read_to_string(&settings_path)?;
@@ -172,7 +172,7 @@ impl Settings {
 
         // 2. Project settings (.claude/settings.json)
         if let Some(root) = project_root {
-            let project_path = root.join(".claude").join("settings.json");
+            let project_path = root.join(".venus").join("settings.json");
             if project_path.exists() {
                 let content = std::fs::read_to_string(&project_path)?;
                 let file_settings: Settings = serde_json::from_str(&content)?;
@@ -196,8 +196,8 @@ impl Settings {
         if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
             settings.api_key = Some(key);
         }
-        // OAuth token: CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN
-        if let Ok(token) = std::env::var("CLAUDE_CODE_OAUTH_TOKEN")
+        // OAuth token: VENUS_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN
+        if let Ok(token) = std::env::var("VENUS_OAUTH_TOKEN")
             .or_else(|_| std::env::var("ANTHROPIC_AUTH_TOKEN"))
         {
             settings.auth_token = Some(token);
@@ -296,6 +296,6 @@ impl Settings {
     }
 
     pub fn project_settings_path(project_root: &PathBuf) -> PathBuf {
-        project_root.join(".claude").join("settings.json")
+        project_root.join(".venus").join("settings.json")
     }
 }

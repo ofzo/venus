@@ -304,7 +304,7 @@ impl CronScheduler {
         let jobs_read = jobs.read().await;
         let durable: Vec<&CronJob> = jobs_read.values().filter(|j| j.durable).collect();
         let json = serde_json::to_string_pretty(&serde_json::json!({ "jobs": durable }))?;
-        let path = project_dir.join(".claude").join("scheduled_tasks.json");
+        let path = project_dir.join(".venus").join("scheduled_tasks.json");
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
@@ -316,7 +316,7 @@ impl CronScheduler {
         jobs: &Arc<RwLock<HashMap<String, CronJob>>>,
         project_dir: &Path,
     ) -> Result<()> {
-        let path = project_dir.join(".claude").join("scheduled_tasks.json");
+        let path = project_dir.join(".venus").join("scheduled_tasks.json");
         if !path.exists() {
             return Ok(());
         }

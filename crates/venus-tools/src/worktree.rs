@@ -78,12 +78,12 @@ impl Tool for EnterWorktreeTool {
             ));
         }
 
-        // Create worktree directory under .claude/worktrees/
-        let worktree_base = ctx.working_dir.join(".claude").join("worktrees");
+        // Create worktree directory under .venus/worktrees/
+        let worktree_base = ctx.working_dir.join(".venus").join("worktrees");
         tokio::fs::create_dir_all(&worktree_base).await?;
 
         let worktree_path = worktree_base.join(&name);
-        let branch_name = format!("claude/{}", name);
+        let branch_name = format!("venus/{}", name);
 
         // Create git worktree with new branch
         let output = Command::new("git")

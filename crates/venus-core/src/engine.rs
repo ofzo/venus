@@ -8,7 +8,7 @@ use tracing::{debug, info};
 use venus_utils::cost::TokenUsage;
 
 use crate::background::BackgroundTaskRuntime;
-use venus_utils::claudemd;
+use venus_utils::venusmd;
 use venus_utils::config::Settings;
 use venus_utils::context_window;
 use venus_utils::cost::CostTracker;
@@ -864,7 +864,7 @@ impl QueryEngine {
 
     /// Build the thinking parameter for the API request, if applicable.
     fn build_thinking_param(&self) -> Option<serde_json::Value> {
-        if std::env::var("CLAUDE_CODE_DISABLE_THINKING").is_ok() {
+        if std::env::var("VENUS_DISABLE_THINKING").is_ok() {
             return None;
         }
         if !context_window::model_supports_thinking(&self.model) {
@@ -918,7 +918,7 @@ fn add_cache_control_to_messages(mut messages: Vec<serde_json::Value>) -> Vec<se
 async fn build_system_prompt(working_dir: &std::path::Path) -> String {
     let mut parts = Vec::new();
 
-    parts.push("You are Claude, an AI assistant created by Anthropic. You help users with software engineering tasks.".to_string());
+    parts.push("You are Venus, an AI coding assistant. You help users with software engineering tasks.".to_string());
 
     // Add git context
     if let Ok(Some(git_ctx)) = git::get_git_context(working_dir).await {
@@ -928,10 +928,10 @@ async fn build_system_prompt(working_dir: &std::path::Path) -> String {
         ));
     }
 
-    // Add CLAUDE.md content
+    // Add VENUS.md content
     let git_root = git::find_git_root(working_dir).await.ok().flatten();
-    if let Ok(claude_files) = claudemd::load_claude_md_files(git_root.as_deref()).await {
-        let merged = claudemd::merge_claude_md(&claude_files);
+    if let Ok(venus_files) = venusmd::load_venus_md_files(git_root.as_deref()).await {
+        let merged = venusmd::merge_venus_md(&venus_files);
         if !merged.is_empty() {
             parts.push(format!("\n# Instructions\n{}", merged));
         }

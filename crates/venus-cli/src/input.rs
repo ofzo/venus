@@ -200,5 +200,5 @@ impl Completer for SlashCompleter {
 
 /// Get the default history file path (~/.claude/venus_history.txt).
 pub fn default_history_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| h.join(".claude").join("venus_history.txt"))
+    dirs::home_dir().map(|h| h.join(".venus").join("venus_history.txt"))
 }

@@ -6,11 +6,15 @@ pub fn home_dir() -> Result<PathBuf> {
 }
 
 pub fn claude_config_dir() -> Result<PathBuf> {
-    Ok(home_dir()?.join(".claude"))
+    Ok(home_dir()?.join(".venus"))
 }
 
-pub fn claude_global_config_path() -> Result<PathBuf> {
-    Ok(home_dir()?.join(".claude.json"))
+pub fn venus_config_dir() -> Result<PathBuf> {
+    Ok(home_dir()?.join(".venus"))
+}
+
+pub fn venus_global_config_path() -> Result<PathBuf> {
+    Ok(home_dir()?.join(".venus.json"))
 }
 
 pub fn resolve_path(path: &str, working_dir: &Path) -> PathBuf {

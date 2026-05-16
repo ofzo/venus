@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::fs_helpers::claude_config_dir;
+use crate::fs_helpers::venus_config_dir;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -50,13 +50,13 @@ pub struct MemoryEntry {
 
 /// Get the user-level memory directory: `~/.claude/memory/`
 fn user_memory_dir() -> Result<PathBuf> {
-    Ok(claude_config_dir()?.join("memory"))
+    Ok(venus_config_dir()?.join("memory"))
 }
 
 /// Get memory directory. `project_root=None` -> user-level, `Some` -> project-level.
 pub fn memory_dir(project_root: Option<&Path>) -> Result<PathBuf> {
     match project_root {
-        Some(root) => Ok(root.join(".claude").join("memory")),
+        Some(root) => Ok(root.join(".venus").join("memory")),
         None => user_memory_dir(),
     }
 }
@@ -396,13 +396,13 @@ mod tests {
     fn test_memory_dir_user() {
         let dir = memory_dir(None).unwrap();
         assert!(dir.ends_with("memory"));
-        assert!(dir.to_string_lossy().contains(".claude"));
+        assert!(dir.to_string_lossy().contains(".venus"));
     }
 
     #[test]
     fn test_memory_dir_project() {
         let dir = memory_dir(Some(Path::new("/tmp/myproject"))).unwrap();
-        assert_eq!(dir, PathBuf::from("/tmp/myproject/.claude/memory"));
+        assert_eq!(dir, PathBuf::from("/tmp/myproject/.venus/memory"));
     }
 
     #[tokio::test]

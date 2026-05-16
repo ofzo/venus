@@ -18,13 +18,13 @@ struct SessionFile {
     messages: Vec<serde_json::Value>,
 }
 
-/// Get the sessions directory: ~/.claude/sessions/
+/// Get the sessions directory: ~/.venus/sessions/
 pub fn sessions_dir() -> Result<PathBuf> {
     let home = dirs::home_dir().context("could not determine home directory")?;
-    Ok(home.join(".claude").join("sessions"))
+    Ok(home.join(".venus").join("sessions"))
 }
 
-/// Save messages to a session file: ~/.claude/sessions/{session_id}.json
+/// Save messages to a session file: ~/.venus/sessions/{session_id}.json
 pub async fn save_session(
     session_id: &str,
     meta: &SessionMeta,
@@ -104,7 +104,7 @@ mod tests {
     #[test]
     fn test_sessions_dir() {
         let dir = sessions_dir().unwrap();
-        assert!(dir.ends_with(".claude/sessions"));
+        assert!(dir.ends_with(".venus/sessions"));
     }
 
     #[test]
@@ -115,7 +115,7 @@ mod tests {
             created_at: 1000,
             updated_at: 2000,
             message_count: 5,
-            model: "claude-3".to_string(),
+            model: "venus-3".to_string(),
         };
         let json = serde_json::to_string(&meta).unwrap();
         let deserialized: SessionMeta = serde_json::from_str(&json).unwrap();

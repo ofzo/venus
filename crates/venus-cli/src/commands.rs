@@ -263,13 +263,13 @@ pub async fn handle_command(
             CommandResult::InjectMessage(prompt)
         }
         "/init" => {
-            let claude_md = engine.working_dir.join("CLAUDE.md");
+            let claude_md = engine.working_dir.join("VENUS.md");
             if claude_md.exists() {
-                eprintln!("  CLAUDE.md already exists.\n");
+                eprintln!("  VENUS.md already exists.\n");
                 return CommandResult::Continue;
             }
             CommandResult::InjectMessage(
-                "Create a CLAUDE.md file for this project. Analyze the project structure, \
+                "Create a VENUS.md file for this project. Analyze the project structure, \
                  language, build system, and conventions. Include: project overview, \
                  build/test commands, code style, important notes.".to_string()
             )
@@ -641,16 +641,16 @@ async fn handle_doctor(engine: &QueryEngine) {
 
     // Check API credentials
     let has_api_key = std::env::var("ANTHROPIC_API_KEY").is_ok();
-    let has_auth_token = std::env::var("CLAUDE_CODE_OAUTH_TOKEN").is_ok()
+    let has_auth_token = std::env::var("VENUS_OAUTH_TOKEN").is_ok()
         || std::env::var("ANTHROPIC_AUTH_TOKEN").is_ok();
     print_check("API credential (key or token)", has_api_key || has_auth_token);
 
-    // Check ~/.claude/settings.json
+    // Check ~/.venus/settings.json
     let settings_path = dirs_path("settings.json");
     let settings_exists = settings_path
         .map(|p| p.exists())
         .unwrap_or(false);
-    print_check("~/.claude/settings.json", settings_exists);
+    print_check("~/.venus/settings.json", settings_exists);
 
     eprintln!();
 }
@@ -763,7 +763,7 @@ fn print_check(label: &str, ok: bool) {
 
 /// Resolve ~/.claude/<filename> path.
 fn dirs_path(filename: &str) -> Option<std::path::PathBuf> {
-    dirs::home_dir().map(|h| h.join(".claude").join(filename))
+    dirs::home_dir().map(|h| h.join(".venus").join(filename))
 }
 
 /// List installed plugins from standard directories.
@@ -771,11 +771,11 @@ async fn handle_plugins() {
     let plugin_dirs = vec![
         dirs::home_dir()
             .unwrap_or_default()
-            .join(".claude")
+            .join(".venus")
             .join("plugins"),
         std::env::current_dir()
             .unwrap_or_default()
-            .join(".claude")
+            .join(".venus")
             .join("plugins"),
     ];
 
@@ -788,7 +788,7 @@ async fn handle_plugins() {
     let plugins = registry.all_plugins();
     if plugins.is_empty() {
         eprintln!(
-            "\n  No plugins installed.\n\n  Place plugins in ~/.claude/plugins/ or ./.claude/plugins/.\n  Each plugin directory must contain a plugin.json manifest.\n"
+            "\n  No plugins installed.\n\n  Place plugins in ~/.venus/plugins/ or ./.venus/plugins/.\n  Each plugin directory must contain a plugin.json manifest.\n"
         );
         return;
     }
@@ -843,7 +843,7 @@ fn print_help() {
     /resume [n|id]  Resume a previous session
     /commit         Generate conventional commit from staged changes
     /review         Review code changes for issues
-    /init           Create CLAUDE.md for this project
+    /init           Create VENUS.md for this project
     /memory [list]  List memory entries
     /skills         List loaded skills
     /tasks          List active tasks
