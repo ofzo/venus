@@ -263,8 +263,8 @@ pub async fn handle_command(
             CommandResult::InjectMessage(prompt)
         }
         "/init" => {
-            let claude_md = engine.working_dir.join("VENUS.md");
-            if claude_md.exists() {
+            let venus_md = engine.working_dir.join("VENUS.md");
+            if venus_md.exists() {
                 eprintln!("  VENUS.md already exists.\n");
                 return CommandResult::Continue;
             }
