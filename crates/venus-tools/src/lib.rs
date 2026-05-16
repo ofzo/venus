@@ -1,6 +1,8 @@
 pub mod agent;
 pub mod ask_user;
 pub mod bash;
+pub mod brief;
+pub mod config_tool;
 pub mod cron_create;
 pub mod cron_delete;
 pub mod cron_list;
@@ -26,6 +28,9 @@ pub mod snip;
 pub mod synthetic_output;
 pub mod task_create;
 pub mod task_get;
+#[cfg(test)]
+pub mod test_helpers;
+pub mod todo;
 pub mod task_list;
 pub mod task_output;
 pub mod task_stop;
@@ -77,5 +82,8 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         Box::new(cron_create::CronCreateTool),
         Box::new(cron_delete::CronDeleteTool),
         Box::new(cron_list::CronListTool),
+        Box::new(todo::TodoWriteTool),
+        Box::new(config_tool::ConfigTool),
+        Box::new(brief::BriefTool),
     ]
 }

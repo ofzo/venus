@@ -261,6 +261,113 @@ pub async fn auto_compact(
     }
 }
 
+/// Compact a specific range of messages, keeping the rest intact.
+pub async fn compact_partial(
+    messages: &mut Vec<Message>,
+    config: &CompactConfig,
+    from: usize,
+    up_to: usize,
+) -> Result<CompactResult> {
+    if from >= up_to || up_to > messages.len() {
+        anyhow::bail!("invalid range: {}..{}", from, up_to);
+    }
+
+    let before = messages.len();
+
+    // Extract the range to summarize
+    let range_msgs: Vec<Message> = messages[from..up_to].to_vec();
+
+    // Build summary prompt from the range
+    let summary = build_range_summary(&range_msgs, config).await?;
+
+    // Replace range with summary
+    let summary_msg = Message::User(UserMessage::new(vec![ContentBlock::text(&summary)]));
+    messages.splice(from..up_to, std::iter::once(summary_msg));
+
+    Ok(CompactResult {
+        messages_before: before,
+        messages_after: messages.len(),
+        tokens_saved_estimate: ((before - messages.len()) * 500) as u64,
+        summary_text: summary,
+    })
+}
+
+/// After compaction, re-read files mentioned in the summary to restore context.
+pub async fn post_compact_refresh(summary: &str, working_dir: &std::path::Path) -> Vec<String> {
+    let mut refreshed = Vec::new();
+    // Simple heuristic: look for file paths in the summary
+    for line in summary.lines() {
+        for word in line.split_whitespace() {
+            // Skip common non-path words
+            if word.len() < 5 || word.starts_with('#') || word.starts_with('-') {
+                continue;
+            }
+            let path = working_dir.join(word);
+            if path.is_file() {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    // Only re-read small files (< 10KB)
+                    if content.len() < 10240 {
+                        refreshed.push(format!("{}:\n{}", path.display(), content));
+                    }
+                }
+            }
+        }
+    }
+    refreshed
+}
+
+/// Compact with plan mode re-injection and post-compact file refresh.
+pub async fn compact_with_hooks_and_plan(
+    messages: &mut Vec<Message>,
+    config: &CompactConfig,
+    hook_runner: Option<&HookRunner>,
+    session_id: &str,
+    plan_mode_active: bool,
+    working_dir: &std::path::Path,
+) -> Result<CompactResult> {
+    // Run existing compaction
+    let result = compact_with_hooks(messages, config, hook_runner, session_id).await?;
+
+    // Re-inject plan mode context
+    if plan_mode_active {
+        messages.push(Message::User(UserMessage::new(vec![
+            ContentBlock::text("[Plan mode is active. Continue working according to the plan.]"),
+        ])));
+    }
+
+    // Re-read files mentioned in summary
+    let refreshed = post_compact_refresh(&result.summary_text, working_dir).await;
+    for content in refreshed {
+        messages.push(Message::User(UserMessage::new(vec![
+            ContentBlock::text(&content),
+        ])));
+    }
+
+    Ok(result)
+}
+
+/// Build a summary of a specific range of messages by calling the summarization API.
+async fn build_range_summary(
+    range_msgs: &[Message],
+    config: &CompactConfig,
+) -> Result<String> {
+    let system = summarization_system_prompt();
+    let user_content = build_summary_user_message(range_msgs);
+
+    let response = call_summarization_api(
+        &config.auth_header,
+        &config.auth_value,
+        &config.base_url,
+        &config.model,
+        &system,
+        &user_content,
+        config.max_summary_tokens,
+    )
+    .await?;
+
+    Ok(parse_summary(&response))
+}
+
 /// Make a non-streaming API call for summarization.
 ///
 /// Uses the same reqwest pattern as `engine.rs` to avoid a dependency
@@ -362,4 +469,147 @@ async fn call_summarization_api(
     }
 
     Ok(text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::message::{AssistantMessage, UserMessage};
+
+    fn make_text_message(text: &str) -> Message {
+        Message::User(UserMessage::new(vec![ContentBlock::text(text)]))
+    }
+
+    fn make_assistant_message(text: &str) -> Message {
+        Message::Assistant(AssistantMessage::new(vec![ContentBlock::text(text)]))
+    }
+
+    fn test_config() -> CompactConfig {
+        CompactConfig {
+            keep_recent_groups: 1,
+            model: "test-model".to_string(),
+            auth_header: "x-api-key".to_string(),
+            auth_value: "test-key".to_string(),
+            base_url: "https://api.test.com".to_string(),
+            max_summary_tokens: 1024,
+        }
+    }
+
+    #[test]
+    fn test_compact_partial_invalid_range_from_equals_up_to() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mut messages = vec![
+                make_text_message("hello"),
+                make_text_message("world"),
+                make_text_message("foo"),
+            ];
+            let config = test_config();
+            let result = compact_partial(&mut messages, &config, 1, 1).await;
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("invalid range"));
+        });
+    }
+
+    #[test]
+    fn test_compact_partial_invalid_range_up_to_exceeds() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mut messages = vec![
+                make_text_message("hello"),
+                make_text_message("world"),
+            ];
+            let config = test_config();
+            let result = compact_partial(&mut messages, &config, 0, 5).await;
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("invalid range"));
+        });
+    }
+
+    #[test]
+    fn test_compact_partial_invalid_range_from_greater_than_up_to() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mut messages = vec![
+                make_text_message("hello"),
+                make_text_message("world"),
+            ];
+            let config = test_config();
+            let result = compact_partial(&mut messages, &config, 2, 1).await;
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("invalid range"));
+        });
+    }
+
+    #[test]
+    fn test_post_compact_refresh_finds_files() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let tmp = std::env::temp_dir();
+            let test_file = tmp.join("venus_test_post_compact_refresh.txt");
+            std::fs::write(&test_file, "hello from test file").unwrap();
+
+            let summary = format!("We edited {}", test_file.display());
+            let refreshed = post_compact_refresh(&summary, &tmp).await;
+            assert_eq!(refreshed.len(), 1);
+            assert!(refreshed[0].contains("hello from test file"));
+
+            std::fs::remove_file(&test_file).unwrap();
+        });
+    }
+
+    #[test]
+    fn test_post_compact_refresh_skips_large_files() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let tmp = std::env::temp_dir();
+            let test_file = tmp.join("venus_test_post_compact_large.txt");
+            // Create a file > 10KB
+            let large_content = "x".repeat(11000);
+            std::fs::write(&test_file, &large_content).unwrap();
+
+            let summary = format!("We edited {}", test_file.display());
+            let refreshed = post_compact_refresh(&summary, &tmp).await;
+            assert!(refreshed.is_empty());
+
+            std::fs::remove_file(&test_file).unwrap();
+        });
+    }
+
+    #[test]
+    fn test_post_compact_refresh_skips_nonexistent_files() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let tmp = std::env::temp_dir();
+            let summary = "We edited /nonexistent/path/file.rs which does not exist";
+            let refreshed = post_compact_refresh(summary, &tmp).await;
+            assert!(refreshed.is_empty());
+        });
+    }
+
+    #[test]
+    fn test_compact_partial_valid_range() {
+        // This test verifies the range validation works correctly for valid inputs.
+        // We can't easily test the full API call without mocking, so we just test
+        // that valid ranges pass the initial checks.
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mut messages = vec![
+                make_text_message("msg1"),
+                make_text_message("msg2"),
+                make_text_message("msg3"),
+                make_text_message("msg4"),
+            ];
+            let config = test_config();
+            // This will fail at the API call stage (since we don't have a real API),
+            // but it should NOT fail at the range validation stage.
+            let result = compact_partial(&mut messages, &config, 0, 2).await;
+            assert!(result.is_err());
+            let err_msg = result.unwrap_err().to_string();
+            assert!(
+                !err_msg.contains("invalid range"),
+                "Should not fail with 'invalid range' for valid range 0..2"
+            );
+        });
+    }
 }
