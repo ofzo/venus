@@ -610,18 +610,34 @@ async fn handle_config(engine: &QueryEngine) {
 
     let total_usage = engine.cost_tracker.lock().unwrap().total_usage();
 
+    let provider_name = engine.settings.active_provider.as_deref().unwrap_or("(none)");
+    let provider_type = engine.settings.provider_type();
+
     eprintln!("\n  \x1b[1mConfiguration:\x1b[0m");
-    eprintln!("    Model:           {}", engine.model);
-    eprintln!("    Base URL:        {}", engine.base_url);
-    eprintln!("    Working dir:     {}", engine.working_dir.display());
-    eprintln!("    Permission mode: {}", permission_mode);
-    eprintln!("    Max tokens:      {}", engine.max_tokens);
-    eprintln!("    Max turns:       {}", engine.max_turns);
+    eprintln!("    Provider:          {} ({})", provider_name, provider_type);
+    eprintln!("    Model:             {}", engine.model);
+    eprintln!("    Base URL:          {}", engine.base_url);
+    eprintln!("    Working dir:       {}", engine.working_dir.display());
+    eprintln!("    Permission mode:   {}", permission_mode);
+    eprintln!("    Max tokens:        {}", engine.max_tokens);
+    eprintln!("    Max turns:         {}", engine.max_turns);
     if let Some(budget) = engine.budget_usd {
-        eprintln!("    Budget:          ${:.2}", budget);
+        eprintln!("    Budget:            ${:.2}", budget);
+    }
+    if let Some(ref thinking) = engine.settings.thinking {
+        eprintln!("    Thinking:          {}", thinking.mode.as_deref().unwrap_or("default"));
+    }
+    if let Some(ref allow) = engine.settings.always_allow {
+        eprintln!("    Allow rules:       {}", allow.len());
+    }
+    if let Some(ref deny) = engine.settings.always_deny {
+        eprintln!("    Deny rules:        {}", deny.len());
+    }
+    if let Some(ref mcp) = engine.settings.mcp_servers {
+        eprintln!("    MCP servers:       {}", mcp.len());
     }
     eprintln!(
-        "    Token usage:     {} input, {} output\n",
+        "    Token usage:       {} input, {} output\n",
         total_usage.input_tokens + total_usage.cache_read_tokens,
         total_usage.output_tokens
     );

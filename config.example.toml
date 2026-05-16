@@ -1,0 +1,121 @@
+# Venus Configuration Example
+# Place at ~/.venus/config.toml (global) or <project>/.venus/config.toml (project)
+
+# Active provider to use for API calls
+active_provider = "anthropic"
+
+# Override provider's default model (optional)
+# model = "claude-sonnet-4-20250514"
+
+# Max output tokens per response
+# max_tokens = 16384
+
+# Max agentic turns per query
+max_turns = 25
+
+# Max budget in USD (optional)
+# budget_usd = 10.0
+
+# Permission mode: "default", "auto", or "bypass"
+permission_mode = "default"
+
+# Extra system prompt appended to the default
+# custom_system_prompt = "Always respond in Chinese."
+
+# Allowed tools (if set, only these are permitted)
+# allowed_tools = ["Read", "Glob", "Grep", "Bash"]
+
+# Disallowed tools
+# disallowed_tools = []
+
+# ============================================================
+# Provider Configurations
+# ============================================================
+
+[provider.anthropic]
+type = "anthropic"
+api_key = "sk-ant-your-key-here"
+base_url = "https://api.anthropic.com"
+default_model = "claude-sonnet-4-20250514"
+# max_tokens = 16384
+# api_version = "2023-06-01"
+
+# Example: OpenAI-compatible provider (e.g., local LLM)
+# [provider.local]
+# type = "openai-compatible"
+# api_key = "not-needed"
+# base_url = "http://localhost:11434/v1"
+# default_model = "llama3"
+
+# Example: OpenAI provider
+# [provider.openai]
+# type = "openai"
+# api_key = "sk-your-key"
+# base_url = "https://api.openai.com/v1"
+# default_model = "gpt-4o"
+
+# ============================================================
+# Thinking Configuration
+# ============================================================
+
+[thinking]
+mode = "adaptive"
+# budget_tokens = 10000
+
+# ============================================================
+# Permission Rules
+# ============================================================
+
+# Auto-allow rules
+[[always_allow]]
+tool = "Read"
+# pattern = "*.rs"
+
+[[always_allow]]
+tool = "Glob"
+
+[[always_allow]]
+tool = "Grep"
+
+# Auto-deny rules
+# [[always_deny]]
+# tool = "Bash"
+# pattern = "rm -rf *"
+
+# ============================================================
+# MCP Servers
+# ============================================================
+
+# [mcp_servers.my-server]
+# command = "node"
+# args = ["server.js"]
+# transport = "stdio"
+
+# [mcp_servers.remote]
+# command = "mcp-server"
+# transport = "sse"
+# url = "http://localhost:3000"
+
+# ============================================================
+# Hooks
+# ============================================================
+
+# [[hooks.PreToolUse]]
+# matcher = "Bash|Write"
+#
+# [[hooks.PreToolUse.hooks]]
+# command = "echo 'tool about to execute'"
+# timeout = 5
+# once = false
+# async = false
+
+# HTTP hook example
+# [[hooks.PostToolUse]]
+# matcher = "Bash"
+#
+# [[hooks.PostToolUse.hooks]]
+# type = "http"
+# command = "https://webhook.example.com/notify"
+# timeout = 10
+# [hooks.PostToolUse.hooks.headers]
+# Authorization = "Bearer webhook-token"

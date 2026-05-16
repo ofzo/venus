@@ -271,7 +271,7 @@ async fn main() -> Result<()> {
     let mut engine =
         QueryEngine::new(settings.clone(), tools, permissions, working_dir.clone(), task_store, background_runtime, hook_runner).await?;
 
-    // Apply CLI flags to engine
+    // CLI flag overrides (applied after settings-based engine init)
     if let Some(max_turns) = cli.max_turns {
         engine.max_turns = max_turns;
     }
@@ -286,17 +286,6 @@ async fn main() -> Result<()> {
         let content = std::fs::read_to_string(prompt_file)
             .with_context(|| format!("failed to read system prompt file: {}", prompt_file.display()))?;
         engine.system_prompt = content;
-    }
-    // Store tool filtering flags for runtime use (logged via verbose mode)
-    if cli.allowed_tools.is_some() || cli.disallowed_tools.is_some() {
-        tracing::debug!(
-            allowed = ?cli.allowed_tools,
-            disallowed = ?cli.disallowed_tools,
-            "tool filtering flags specified"
-        );
-    }
-    if let Some(ref name) = cli.name {
-        tracing::debug!(session_name = %name, "session name specified");
     }
 
     // Resume session if requested

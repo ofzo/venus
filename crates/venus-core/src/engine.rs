@@ -77,6 +77,17 @@ impl QueryEngine {
         // Build system prompt
         let system_prompt = build_system_prompt(&working_dir).await;
 
+        // Read max_turns and budget from settings
+        let max_turns = settings.max_turns.unwrap_or(25);
+        let budget_usd = settings.budget_usd;
+
+        // Append custom_system_prompt if configured
+        let mut system_prompt = build_system_prompt(&working_dir).await;
+        if let Some(ref custom) = settings.custom_system_prompt {
+            system_prompt.push_str("\n\n");
+            system_prompt.push_str(custom);
+        }
+
         Ok(Self {
             session_id: uuid::Uuid::new_v4().to_string(),
             auth_header,
@@ -99,8 +110,8 @@ impl QueryEngine {
             hook_runner,
             plan_mode: Arc::new(AtomicBool::new(false)),
             cron_scheduler: None,
-            max_turns: 25,
-            budget_usd: None,
+            max_turns,
+            budget_usd,
         })
     }
 
