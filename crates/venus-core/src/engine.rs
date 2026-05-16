@@ -1095,8 +1095,24 @@ mod tests {
     }
 
     fn test_settings() -> Arc<Settings> {
+        use std::collections::HashMap;
+        use venus_utils::config::ProviderConfig;
+        let mut providers = HashMap::new();
+        providers.insert(
+            "anthropic".to_string(),
+            ProviderConfig {
+                provider_type: "anthropic".to_string(),
+                api_key: Some("test-key".to_string()),
+                auth_token: None,
+                base_url: None,
+                default_model: None,
+                max_tokens: None,
+                api_version: None,
+            },
+        );
         Arc::new(Settings {
-            api_key: Some("test-key".to_string()),
+            active_provider: Some("anthropic".to_string()),
+            provider: Some(providers),
             ..Default::default()
         })
     }

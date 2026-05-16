@@ -141,7 +141,25 @@ async fn main() -> Result<()> {
         settings.model = Some(model);
     }
     if let Some(key) = cli.api_key {
-        settings.api_key = Some(key);
+        // Set API key on the active provider (create default anthropic provider if needed)
+        use std::collections::HashMap;
+        let providers = settings.provider.get_or_insert_with(HashMap::new);
+        let provider_name = settings.active_provider.as_deref().unwrap_or("anthropic");
+        providers
+            .entry(provider_name.to_string())
+            .or_insert_with(|| venus_utils::config::ProviderConfig {
+                provider_type: "anthropic".to_string(),
+                api_key: None,
+                auth_token: None,
+                base_url: None,
+                default_model: None,
+                max_tokens: None,
+                api_version: None,
+            })
+            .api_key = Some(key);
+        if settings.active_provider.is_none() {
+            settings.active_provider = Some("anthropic".to_string());
+        }
     }
 
     // --thinking: override settings.thinking

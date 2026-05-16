@@ -6,57 +6,108 @@ use tracing::debug;
 
 use crate::fs_helpers;
 
+/// Top-level Venus configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
 pub struct Settings {
+    /// Active provider name (key into `[provider]` map).
+    #[serde(default)]
+    pub active_provider: Option<String>,
+
+    /// Model to use (overrides provider's default_model).
     #[serde(default)]
     pub model: Option<String>,
+
+    /// Max output tokens.
     #[serde(default)]
     pub max_tokens: Option<u32>,
-    #[serde(default)]
-    pub api_key: Option<String>,
-    /// OAuth Bearer token (alternative to api_key).
-    /// Takes precedence over api_key when both are set.
-    #[serde(default)]
-    pub auth_token: Option<String>,
-    #[serde(default)]
-    pub base_url: Option<String>,
+
+    /// Permission mode: default, auto, bypass.
     #[serde(default)]
     pub permission_mode: Option<String>,
+
+    /// Extra system prompt appended to the default.
     #[serde(default)]
     pub custom_system_prompt: Option<String>,
-    #[serde(default)]
-    pub always_allow: Option<Vec<PermissionRule>>,
-    #[serde(default)]
-    pub always_deny: Option<Vec<PermissionRule>>,
-    #[serde(default)]
-    pub hooks: Option<HookConfig>,
-    #[serde(default)]
-    pub thinking: Option<ThinkingConfig>,
-    /// Environment variables to inject into the process.
-    /// Applied to std::env during settings load, after merging all levels.
-    #[serde(default)]
-    pub env: Option<HashMap<String, String>>,
-    /// MCP (Model Context Protocol) server configurations.
-    #[serde(default)]
-    pub mcp_servers: Option<HashMap<String, McpServerConfig>>,
-    /// Maximum agentic turns per query.
+
+    /// Max agentic turns per query.
     #[serde(default)]
     pub max_turns: Option<u32>,
-    /// Maximum budget in USD.
+
+    /// Max budget in USD.
     #[serde(default)]
     pub budget_usd: Option<f64>,
-    /// Allowed tools (if set, only these tools are permitted).
+
+    /// Allowed tools (if set, only these are permitted).
     #[serde(default)]
     pub allowed_tools: Option<Vec<String>>,
-    /// Disallowed tools (if set, these tools are denied).
+
+    /// Disallowed tools.
     #[serde(default)]
     pub disallowed_tools: Option<Vec<String>>,
+
+    /// Extended thinking configuration.
+    #[serde(default)]
+    pub thinking: Option<ThinkingConfig>,
+
+    /// Permission allow rules.
+    #[serde(default)]
+    pub always_allow: Option<Vec<PermissionRule>>,
+
+    /// Permission deny rules.
+    #[serde(default)]
+    pub always_deny: Option<Vec<PermissionRule>>,
+
+    /// Environment variables to inject.
+    #[serde(default)]
+    pub env: Option<HashMap<String, String>>,
+
+    /// Provider configurations (name -> config).
+    #[serde(default)]
+    pub provider: Option<HashMap<String, ProviderConfig>>,
+
+    /// MCP server configurations (name -> config).
+    #[serde(default)]
+    pub mcp_servers: Option<HashMap<String, McpServerConfig>>,
+
+    /// Hook configurations (event name -> list of hook entries).
+    #[serde(default)]
+    pub hooks: Option<HookConfig>,
+}
+
+/// Configuration for an API provider.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderConfig {
+    /// Provider type: "anthropic", "openai", "openai-compatible".
+    #[serde(rename = "type")]
+    pub provider_type: String,
+
+    /// API key for this provider.
+    #[serde(default)]
+    pub api_key: Option<String>,
+
+    /// OAuth Bearer token (alternative to api_key, takes precedence).
+    #[serde(default)]
+    pub auth_token: Option<String>,
+
+    /// API base URL.
+    #[serde(default)]
+    pub base_url: Option<String>,
+
+    /// Default model for this provider.
+    #[serde(default)]
+    pub default_model: Option<String>,
+
+    /// Default max tokens for this provider.
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
+
+    /// API version header (for Anthropic-compatible APIs).
+    #[serde(default)]
+    pub api_version: Option<String>,
 }
 
 /// Extended thinking configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct ThinkingConfig {
     /// Thinking mode: "adaptive", "enabled", or "disabled".
     #[serde(default)]
@@ -75,10 +126,8 @@ pub struct HookConfig {
 
 /// A single hook entry with an optional matcher and a list of hooks to execute.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct HookEntry {
     /// Tool name pattern for tool events (pipe-separated: "Edit|Write|Bash").
-    /// Ignored for non-tool events.
     #[serde(default)]
     pub matcher: Option<String>,
     /// The hook definitions to execute.
@@ -88,24 +137,22 @@ pub struct HookEntry {
 
 /// A shell command to execute as a hook.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct CommandHook {
-    /// Hook type: "command" (default, shell command) or "http" (POST to URL).
+    /// Hook type: "command" (default) or "http".
     #[serde(default, rename = "type")]
     pub hook_type: Option<String>,
-    /// Shell command string (executed via `sh -c`) or URL for HTTP hooks.
+    /// Shell command string or URL for HTTP hooks.
     pub command: String,
     /// Timeout in seconds (default: 10).
     #[serde(default = "default_hook_timeout")]
     pub timeout: u64,
-    /// Conditional expression for hook execution (currently unused, reserved for future use).
-    #[serde(default)]
-    #[serde(rename = "if")]
+    /// Conditional expression.
+    #[serde(default, rename = "if")]
     pub r#if: Option<String>,
-    /// If true, this hook only runs once per session.
+    /// Only run once per session.
     #[serde(default)]
     pub once: bool,
-    /// If true, run this hook asynchronously (non-blocking).
+    /// Run asynchronously (non-blocking).
     #[serde(default)]
     pub r#async: bool,
     /// Custom HTTP headers for "http" type hooks.
@@ -126,7 +173,6 @@ pub struct PermissionRule {
 
 /// Configuration for a single MCP server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct McpServerConfig {
     /// Command to launch the MCP server.
     pub command: String,
@@ -149,42 +195,39 @@ fn default_mcp_transport() -> String {
 }
 
 impl Settings {
-    /// Load settings from global config only (no project-level settings).
+    /// Load settings from global config only.
     pub fn load() -> Result<Self> {
         Self::load_with_project(None)
     }
 
     /// Load settings with multi-level merging.
-    /// Merge order: defaults → ~/.claude/settings.json → project .claude/settings.json → env vars
+    /// Merge order: defaults → ~/.venus/config.toml → project .venus/config.toml → env vars
     pub fn load_with_project(project_root: Option<&std::path::Path>) -> Result<Self> {
         let mut settings = Settings::default();
 
-        // 1. Global settings (~/.claude/settings.json)
+        // 1. Global settings (~/.venus/config.toml)
         if let Ok(config_dir) = fs_helpers::venus_config_dir() {
-            let settings_path = config_dir.join("settings.json");
+            let settings_path = config_dir.join("config.toml");
             if settings_path.exists() {
                 let content = std::fs::read_to_string(&settings_path)?;
-                let file_settings: Settings = serde_json::from_str(&content)?;
+                let file_settings: Settings = toml::from_str(&content)?;
                 settings.merge(file_settings);
                 debug!("loaded global settings from {:?}", settings_path);
             }
         }
 
-        // 2. Project settings (.claude/settings.json)
+        // 2. Project settings (.venus/config.toml)
         if let Some(root) = project_root {
-            let project_path = root.join(".venus").join("settings.json");
+            let project_path = root.join(".venus").join("config.toml");
             if project_path.exists() {
                 let content = std::fs::read_to_string(&project_path)?;
-                let file_settings: Settings = serde_json::from_str(&content)?;
+                let file_settings: Settings = toml::from_str(&content)?;
                 settings.merge(file_settings);
                 debug!("loaded project settings from {:?}", project_path);
             }
         }
 
         // 3. Apply configured env vars to the process environment.
-        // This happens after merging all config levels so that project settings
-        // can extend global ones, but before reading process env vars below
-        // so that real env vars always win.
         if let Some(ref env_map) = settings.env {
             for (key, value) in env_map {
                 std::env::set_var(key, value);
@@ -194,16 +237,40 @@ impl Settings {
 
         // 4. Process environment variables (highest priority)
         if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
-            settings.api_key = Some(key);
+            // Set on the active provider or create a default one
+            settings
+                .provider
+                .get_or_insert_with(HashMap::new)
+                .entry("anthropic".to_string())
+                .or_insert_with(|| ProviderConfig {
+                    provider_type: "anthropic".to_string(),
+                    api_key: None,
+                    auth_token: None,
+                    base_url: None,
+                    default_model: None,
+                    max_tokens: None,
+                    api_version: None,
+                })
+                .api_key = Some(key);
+            if settings.active_provider.is_none() {
+                settings.active_provider = Some("anthropic".to_string());
+            }
         }
-        // OAuth token: VENUS_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN
         if let Ok(token) = std::env::var("VENUS_OAUTH_TOKEN")
             .or_else(|_| std::env::var("ANTHROPIC_AUTH_TOKEN"))
         {
-            settings.auth_token = Some(token);
+            if let Some(ref mut providers) = settings.provider {
+                if let Some(p) = providers.get_mut("anthropic") {
+                    p.auth_token = Some(token);
+                }
+            }
         }
         if let Ok(url) = std::env::var("ANTHROPIC_BASE_URL") {
-            settings.base_url = Some(url);
+            if let Some(ref mut providers) = settings.provider {
+                if let Some(p) = providers.get_mut("anthropic") {
+                    p.base_url = Some(url);
+                }
+            }
         }
         if let Ok(model) = std::env::var("ANTHROPIC_MODEL") {
             settings.model = Some(model);
@@ -213,46 +280,20 @@ impl Settings {
     }
 
     fn merge(&mut self, other: Settings) {
+        if other.active_provider.is_some() {
+            self.active_provider = other.active_provider;
+        }
         if other.model.is_some() {
             self.model = other.model;
         }
         if other.max_tokens.is_some() {
             self.max_tokens = other.max_tokens;
         }
-        if other.api_key.is_some() {
-            self.api_key = other.api_key;
-        }
-        if other.auth_token.is_some() {
-            self.auth_token = other.auth_token;
-        }
-        if other.base_url.is_some() {
-            self.base_url = other.base_url;
-        }
         if other.permission_mode.is_some() {
             self.permission_mode = other.permission_mode;
         }
         if other.custom_system_prompt.is_some() {
             self.custom_system_prompt = other.custom_system_prompt;
-        }
-        if other.always_allow.is_some() {
-            self.always_allow = other.always_allow;
-        }
-        if other.always_deny.is_some() {
-            self.always_deny = other.always_deny;
-        }
-        if other.hooks.is_some() {
-            self.hooks = other.hooks;
-        }
-        if other.thinking.is_some() {
-            self.thinking = other.thinking;
-        }
-        if let Some(other_env) = other.env {
-            self.env
-                .get_or_insert_with(HashMap::new)
-                .extend(other_env);
-        }
-        if other.mcp_servers.is_some() {
-            self.mcp_servers = other.mcp_servers;
         }
         if other.max_turns.is_some() {
             self.max_turns = other.max_turns;
@@ -266,36 +307,274 @@ impl Settings {
         if other.disallowed_tools.is_some() {
             self.disallowed_tools = other.disallowed_tools;
         }
+        if other.thinking.is_some() {
+            self.thinking = other.thinking;
+        }
+        if other.always_allow.is_some() {
+            self.always_allow = other.always_allow;
+        }
+        if other.always_deny.is_some() {
+            self.always_deny = other.always_deny;
+        }
+        if let Some(other_env) = other.env {
+            self.env
+                .get_or_insert_with(HashMap::new)
+                .extend(other_env);
+        }
+        if let Some(other_providers) = other.provider {
+            self.provider
+                .get_or_insert_with(HashMap::new)
+                .extend(other_providers);
+        }
+        if other.mcp_servers.is_some() {
+            self.mcp_servers = other.mcp_servers;
+        }
+        if other.hooks.is_some() {
+            self.hooks = other.hooks;
+        }
     }
 
+    /// Get the active provider config.
+    pub fn active_provider_config(&self) -> Option<&ProviderConfig> {
+        let name = self.active_provider.as_deref().unwrap_or("anthropic");
+        self.provider.as_ref()?.get(name)
+    }
+
+    /// Get the effective model name.
     pub fn effective_model(&self) -> &str {
-        self.model.as_deref().unwrap_or("claude-sonnet-4-20250514")
+        if let Some(ref m) = self.model {
+            return m;
+        }
+        if let Some(p) = self.active_provider_config() {
+            if let Some(ref m) = p.default_model {
+                return m;
+            }
+        }
+        "claude-sonnet-4-20250514"
     }
 
+    /// Get the effective max tokens.
     pub fn effective_max_tokens(&self) -> u32 {
-        self.max_tokens.unwrap_or(16384)
+        if let Some(t) = self.max_tokens {
+            return t;
+        }
+        if let Some(p) = self.active_provider_config() {
+            if let Some(t) = p.max_tokens {
+                return t;
+            }
+        }
+        16384
     }
 
+    /// Get the effective base URL.
     pub fn effective_base_url(&self) -> &str {
-        self.base_url
-            .as_deref()
-            .unwrap_or("https://api.anthropic.com")
+        if let Some(p) = self.active_provider_config() {
+            if let Some(ref url) = p.base_url {
+                return url;
+            }
+        }
+        "https://api.anthropic.com"
     }
 
     /// Resolve the credential to use for API requests.
     /// Returns `(header_name, header_value)`.
-    /// Prefers auth_token (Bearer) over api_key (x-api-key).
     pub fn resolve_auth(&self) -> Option<(&'static str, String)> {
-        if let Some(ref token) = self.auth_token {
+        let p = self.active_provider_config()?;
+        if let Some(ref token) = p.auth_token {
             Some(("Authorization", format!("Bearer {}", token)))
         } else {
-            self.api_key
+            p.api_key
                 .as_ref()
                 .map(|key| ("x-api-key", key.clone()))
         }
     }
 
+    /// Get the API version header value (if configured).
+    pub fn api_version(&self) -> Option<&str> {
+        self.active_provider_config()?
+            .api_version
+            .as_deref()
+    }
+
+    /// Get the provider type (anthropic, openai, openai-compatible).
+    pub fn provider_type(&self) -> &str {
+        self.active_provider_config()
+            .map(|p| p.provider_type.as_str())
+            .unwrap_or("anthropic")
+    }
+
     pub fn project_settings_path(project_root: &PathBuf) -> PathBuf {
-        project_root.join(".venus").join("settings.json")
+        project_root.join(".venus").join("config.toml")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_settings() {
+        let s = Settings::default();
+        assert_eq!(s.effective_model(), "claude-sonnet-4-20250514");
+        assert_eq!(s.effective_max_tokens(), 16384);
+        assert_eq!(s.effective_base_url(), "https://api.anthropic.com");
+    }
+
+    #[test]
+    fn test_provider_config() {
+        let mut providers = HashMap::new();
+        providers.insert(
+            "anthropic".to_string(),
+            ProviderConfig {
+                provider_type: "anthropic".to_string(),
+                api_key: Some("test-key".to_string()),
+                auth_token: None,
+                base_url: Some("https://custom.api.com".to_string()),
+                default_model: Some("claude-opus-4-20250514".to_string()),
+                max_tokens: Some(8192),
+                api_version: None,
+            },
+        );
+
+        let settings = Settings {
+            active_provider: Some("anthropic".to_string()),
+            provider: Some(providers),
+            ..Default::default()
+        };
+
+        assert_eq!(settings.effective_model(), "claude-opus-4-20250514");
+        assert_eq!(settings.effective_max_tokens(), 8192);
+        assert_eq!(settings.effective_base_url(), "https://custom.api.com");
+
+        let (header, value) = settings.resolve_auth().unwrap();
+        assert_eq!(header, "x-api-key");
+        assert_eq!(value, "test-key");
+    }
+
+    #[test]
+    fn test_model_override() {
+        let mut providers = HashMap::new();
+        providers.insert(
+            "anthropic".to_string(),
+            ProviderConfig {
+                provider_type: "anthropic".to_string(),
+                api_key: None,
+                auth_token: None,
+                base_url: None,
+                default_model: Some("claude-opus-4-20250514".to_string()),
+                max_tokens: None,
+                api_version: None,
+            },
+        );
+
+        let settings = Settings {
+            active_provider: Some("anthropic".to_string()),
+            model: Some("claude-haiku-4-20250506".to_string()),
+            provider: Some(providers),
+            ..Default::default()
+        };
+
+        // model field overrides provider's default_model
+        assert_eq!(settings.effective_model(), "claude-haiku-4-20250506");
+    }
+
+    #[test]
+    fn test_toml_parse() {
+        let toml_str = r#"
+active_provider = "anthropic"
+
+[provider.anthropic]
+type = "anthropic"
+api_key = "sk-test"
+base_url = "https://api.anthropic.com"
+default_model = "claude-sonnet-4-20250514"
+
+[provider.custom]
+type = "openai-compatible"
+api_key = "custom-key"
+base_url = "http://localhost:11434/v1"
+default_model = "llama3"
+
+[thinking]
+mode = "adaptive"
+"#;
+
+        let settings: Settings = toml::from_str(toml_str).unwrap();
+        assert_eq!(settings.active_provider, Some("anthropic".to_string()));
+        assert!(settings.provider.is_some());
+        let providers = settings.provider.as_ref().unwrap();
+        assert!(providers.contains_key("anthropic"));
+        assert!(providers.contains_key("custom"));
+        assert_eq!(settings.thinking.as_ref().unwrap().mode, Some("adaptive".to_string()));
+    }
+
+    #[test]
+    fn test_toml_with_hooks() {
+        let toml_str = r#"
+[provider.anthropic]
+type = "anthropic"
+api_key = "test"
+
+[[hooks.PreToolUse]]
+matcher = "Bash|Write"
+
+[[hooks.PreToolUse.hooks]]
+command = "echo check"
+timeout = 5
+once = true
+"#;
+
+        let settings: Settings = toml::from_str(toml_str).unwrap();
+        let hooks = settings.hooks.as_ref().unwrap();
+        let pre_tool = hooks.entries.get("PreToolUse").unwrap();
+        assert_eq!(pre_tool.len(), 1);
+        assert_eq!(pre_tool[0].matcher, Some("Bash|Write".to_string()));
+        assert_eq!(pre_tool[0].hooks[0].command, "echo check");
+        assert!(pre_tool[0].hooks[0].once);
+    }
+
+    #[test]
+    fn test_merge_providers() {
+        let mut providers1 = HashMap::new();
+        providers1.insert(
+            "anthropic".to_string(),
+            ProviderConfig {
+                provider_type: "anthropic".to_string(),
+                api_key: Some("key1".to_string()),
+                auth_token: None,
+                base_url: None,
+                default_model: None,
+                max_tokens: None,
+                api_version: None,
+            },
+        );
+
+        let mut providers2 = HashMap::new();
+        providers2.insert(
+            "openai".to_string(),
+            ProviderConfig {
+                provider_type: "openai".to_string(),
+                api_key: Some("key2".to_string()),
+                auth_token: None,
+                base_url: None,
+                default_model: None,
+                max_tokens: None,
+                api_version: None,
+            },
+        );
+
+        let mut s1 = Settings {
+            provider: Some(providers1),
+            ..Default::default()
+        };
+        let s2 = Settings {
+            provider: Some(providers2),
+            ..Default::default()
+        };
+
+        s1.merge(s2);
+        let providers = s1.provider.as_ref().unwrap();
+        assert!(providers.contains_key("anthropic"));
+        assert!(providers.contains_key("openai"));
     }
 }
