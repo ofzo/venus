@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -21,6 +21,7 @@ use crate::task::TaskStore;
 use crate::tool::{PermissionDecision, PermissionHandler, ToolContext, ToolResult};
 use crate::tool_registry::ToolRegistry;
 
+#[derive(Clone)]
 pub struct QueryEngine {
     pub session_id: String,
     /// Auth header name: "Authorization" for Bearer tokens, "x-api-key" for API keys.
@@ -30,11 +31,11 @@ pub struct QueryEngine {
     pub model: String,
     pub base_url: String,
     pub max_tokens: u32,
-    pub messages: Vec<Message>,
+    pub messages: Arc<tokio::sync::Mutex<Vec<Message>>>,
     pub tools: Arc<ToolRegistry>,
     pub settings: Arc<Settings>,
     pub permissions: Arc<dyn PermissionHandler>,
-    pub cost_tracker: CostTracker,
+    pub cost_tracker: Arc<std::sync::Mutex<CostTracker>>,
     pub cancel_token: CancellationToken,
     pub working_dir: PathBuf,
     pub system_prompt: String,
@@ -42,13 +43,17 @@ pub struct QueryEngine {
     pub background_runtime: Arc<BackgroundTaskRuntime>,
     pub created_at: u64,
     /// Counter for consecutive auto-compact failures (circuit breaker).
-    pub auto_compact_failures: u32,
+    pub auto_compact_failures: Arc<AtomicU32>,
     /// Hook runner for lifecycle event hooks.
     pub hook_runner: Arc<HookRunner>,
     /// Whether the engine is currently in plan mode.
     pub plan_mode: Arc<AtomicBool>,
     /// Optional cron scheduler for scheduled tasks.
     pub cron_scheduler: Option<Arc<crate::cron::CronScheduler>>,
+    /// Maximum agentic turns per query.
+    pub max_turns: u32,
+    /// Maximum budget in USD (None = unlimited).
+    pub budget_usd: Option<f64>,
 }
 
 impl QueryEngine {
@@ -79,21 +84,23 @@ impl QueryEngine {
             model,
             base_url,
             max_tokens,
-            messages: Vec::new(),
+            messages: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             tools,
             settings,
             permissions,
-            cost_tracker: CostTracker::new(),
+            cost_tracker: Arc::new(std::sync::Mutex::new(CostTracker::new())),
             cancel_token: CancellationToken::new(),
             working_dir,
             system_prompt,
             task_store,
             background_runtime,
             created_at: chrono::Utc::now().timestamp() as u64,
-            auto_compact_failures: 0,
+            auto_compact_failures: Arc::new(AtomicU32::new(0)),
             hook_runner,
             plan_mode: Arc::new(AtomicBool::new(false)),
             cron_scheduler: None,
+            max_turns: 25,
+            budget_usd: None,
         })
     }
 
@@ -121,58 +128,69 @@ impl QueryEngine {
             model,
             base_url,
             max_tokens,
-            messages: Vec::new(),
+            messages: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             tools,
             settings,
             permissions,
-            cost_tracker: CostTracker::new(),
+            cost_tracker: Arc::new(std::sync::Mutex::new(CostTracker::new())),
             cancel_token: CancellationToken::new(),
             working_dir,
             system_prompt,
             task_store,
             background_runtime,
             created_at: chrono::Utc::now().timestamp() as u64,
-            auto_compact_failures: 0,
+            auto_compact_failures: Arc::new(AtomicU32::new(0)),
             hook_runner,
             plan_mode: Arc::new(AtomicBool::new(false)),
             cron_scheduler: None,
+            max_turns: 25,
+            budget_usd: None,
         }
     }
 
-    /// Submit a user message and process the full query-tool loop.
-    /// Events are sent through the returned receiver.
+    /// Submit a user message and spawn the query loop in a background task.
+    /// Returns a receiver that streams events in real-time.
     pub async fn submit_message(
-        &mut self,
+        &self,
         content: Vec<ContentBlock>,
     ) -> Result<mpsc::UnboundedReceiver<StreamEvent>> {
         let user_msg = UserMessage::new(content);
-        self.messages.push(Message::User(user_msg));
+        self.messages.lock().await.push(Message::User(user_msg));
 
         let (tx, rx) = mpsc::unbounded_channel();
 
-        // Run the query loop
-        self.run_query_loop(tx).await?;
+        // Clone the engine for the spawned task. The Arc-based fields are
+        // shared with the original engine, so messages/cost_tracker updates
+        // are visible to both.
+        let engine = self.clone();
+
+        tokio::spawn(async move {
+            if let Err(e) = engine.run_query_loop(tx.clone()).await {
+                tx.send(StreamEvent::Error(e.to_string())).ok();
+            }
+            // tx is dropped here, closing the channel and signaling completion
+        });
 
         Ok(rx)
     }
 
-    async fn run_query_loop(&mut self, tx: mpsc::UnboundedSender<StreamEvent>) -> Result<()> {
-        let max_iterations = 25; // prevent infinite loops
+    async fn run_query_loop(&self, tx: mpsc::UnboundedSender<StreamEvent>) -> Result<()> {
+        let max_iterations = self.max_turns;
+
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(300))
+            .build()?;
+
+        let url = format!("{}/v1/messages", self.base_url);
 
         for iteration in 0..max_iterations {
             debug!("query loop iteration {}", iteration);
 
             // Build API request
-            let request = self.build_api_request_body();
-
-            // Make streaming API call with retry (covers both connection and mid-stream failures)
-            let client = reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(300))
-                .build()?;
-
-            let url = format!("{}/v1/messages", self.base_url);
+            let request = self.build_api_request_body().await;
             let request_body = serde_json::to_string(&request)?;
 
+            // Make streaming API call with retry (covers both connection and mid-stream failures)
             let assistant_msg = self
                 .stream_with_retry(&client, &url, &request_body, &tx)
                 .await?;
@@ -181,8 +199,21 @@ impl QueryEngine {
 
             // Record usage
             if let Some(usage) = &assistant_msg.usage {
-                self.cost_tracker.record(&self.model, usage);
+                self.cost_tracker.lock().unwrap().record(&self.model, usage);
                 tx.send(StreamEvent::Usage(usage.clone())).ok();
+
+                // Check budget limit
+                if let Some(budget) = self.budget_usd {
+                    let total_cost = self.cost_tracker.lock().unwrap().total_cost_usd();
+                    if total_cost >= budget {
+                        tx.send(StreamEvent::Error(format!(
+                            "Budget limit reached: ${:.2} >= ${:.2}",
+                            total_cost, budget
+                        )))
+                        .ok();
+                        break;
+                    }
+                }
 
                 // Check if auto-compact should trigger
                 let current_input_tokens = usage.input_tokens + usage.cache_read_tokens;
@@ -196,13 +227,16 @@ impl QueryEngine {
                         &self.auth_value,
                         &self.base_url,
                     );
-                    if let Ok(Some(result)) = crate::compact::auto_compact(
-                        &mut self.messages,
-                        &config,
-                        &mut self.auto_compact_failures,
-                    )
-                    .await
+                    let mut messages = self.messages.lock().await;
+                    let mut failures = self
+                        .auto_compact_failures
+                        .load(Ordering::Relaxed);
+                    if let Ok(Some(result)) =
+                        crate::compact::auto_compact(&mut messages, &config, &mut failures).await
                     {
+                        self.auto_compact_failures
+                            .store(failures, Ordering::Relaxed);
+                        drop(messages);
                         tx.send(StreamEvent::AutoCompacted {
                             messages_removed: result.messages_before - result.messages_after,
                             tokens_saved: result.tokens_saved_estimate,
@@ -225,7 +259,10 @@ impl QueryEngine {
                 .collect();
 
             // Add assistant message to history
-            self.messages.push(Message::Assistant(assistant_msg));
+            self.messages
+                .lock()
+                .await
+                .push(Message::Assistant(assistant_msg));
 
             if tool_calls.is_empty()
                 || stop_reason.as_deref() == Some("end_turn") && tool_calls.is_empty()
@@ -243,14 +280,17 @@ impl QueryEngine {
             let results = futures_util::future::join_all(tool_futures).await;
 
             // Add all tool results to messages
-            for ((id, _name, _input), result) in tool_calls.iter().zip(results) {
-                let tool_result_msg =
-                    Message::User(UserMessage::new(vec![ContentBlock::tool_result(
-                        id.clone(),
-                        result.content.clone(),
-                        result.is_error,
-                    )]));
-                self.messages.push(tool_result_msg);
+            {
+                let mut messages = self.messages.lock().await;
+                for ((id, _name, _input), result) in tool_calls.iter().zip(results) {
+                    let tool_result_msg =
+                        Message::User(UserMessage::new(vec![ContentBlock::tool_result(
+                            id.clone(),
+                            result.content.clone(),
+                            result.is_error,
+                        )]));
+                    messages.push(tool_result_msg);
+                }
             }
 
             // Continue the loop for another API call
@@ -574,7 +614,7 @@ impl QueryEngine {
     /// recovery by injecting the partial assistant response into the conversation
     /// and requesting continuation.
     async fn stream_with_retry(
-        &mut self,
+        &self,
         client: &reqwest::Client,
         url: &str,
         body: &str,
@@ -638,7 +678,7 @@ impl QueryEngine {
 
     /// Recover from a mid-stream interruption by saving partial output and requesting continuation.
     async fn recover_from_checkpoint(
-        &mut self,
+        &self,
         checkpoint: &StreamCheckpoint,
         client: &reqwest::Client,
         url: &str,
@@ -668,17 +708,21 @@ impl QueryEngine {
             stop_reason: None,
             usage: Some(checkpoint.input_usage.clone()),
         };
-        self.messages.push(Message::Assistant(partial_msg));
 
-        // 2. Add continuation user message
-        self.messages.push(Message::User(UserMessage::new(vec![
-            ContentBlock::text(
-                "[The previous response was interrupted mid-stream. Continue exactly where you left off.]",
-            ),
-        ])));
+        {
+            let mut messages = self.messages.lock().await;
+            messages.push(Message::Assistant(partial_msg));
+
+            // 2. Add continuation user message
+            messages.push(Message::User(UserMessage::new(vec![
+                ContentBlock::text(
+                    "[The previous response was interrupted mid-stream. Continue exactly where you left off.]",
+                ),
+            ])));
+        }
 
         // 3. Build a fresh API request body with the updated conversation
-        let recovery_body = self.build_api_request_body();
+        let recovery_body = self.build_api_request_body().await;
         let recovery_body_str = serde_json::to_string(&recovery_body)?;
 
         // 4. Send and process without recovery (to avoid infinite recursion)
@@ -690,8 +734,9 @@ impl QueryEngine {
 
     /// Build the full API request body from the current engine state.
     /// Extracted as a helper to allow reuse in recovery paths.
-    fn build_api_request_body(&self) -> serde_json::Value {
-        let api_messages = messages_to_api_params(&self.messages);
+    async fn build_api_request_body(&self) -> serde_json::Value {
+        let messages = self.messages.lock().await;
+        let api_messages = messages_to_api_params(&messages);
         let mut tool_defs = self.tools.api_definitions();
 
         // Build system prompt as array with cache_control
@@ -1022,3 +1067,206 @@ impl std::fmt::Display for StreamRecoveryError {
 }
 
 impl std::error::Error for StreamRecoveryError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::background::BackgroundTaskRuntime;
+    use crate::hooks::HookRunner;
+    use crate::task::TaskStore;
+    use crate::tool_registry::ToolRegistry;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use venus_utils::config::Settings;
+
+    /// A minimal permission handler for testing that allows all tools.
+    struct AllowAllPermissions;
+
+    #[async_trait::async_trait]
+    impl PermissionHandler for AllowAllPermissions {
+        async fn check_permission(
+            &self,
+            _tool_name: &str,
+            _input: &serde_json::Value,
+        ) -> PermissionDecision {
+            PermissionDecision::Allow
+        }
+    }
+
+    fn test_settings() -> Arc<Settings> {
+        Arc::new(Settings {
+            api_key: Some("test-key".to_string()),
+            ..Default::default()
+        })
+    }
+
+    fn test_engine_parts() -> (
+        Arc<ToolRegistry>,
+        Arc<dyn PermissionHandler>,
+        Arc<TaskStore>,
+        Arc<BackgroundTaskRuntime>,
+        Arc<HookRunner>,
+    ) {
+        let tools = Arc::new(ToolRegistry::new(vec![]));
+        let permissions: Arc<dyn PermissionHandler> = Arc::new(AllowAllPermissions);
+        let task_store = Arc::new(TaskStore::new());
+        let background_runtime = Arc::new(BackgroundTaskRuntime::new());
+        let hook_runner = Arc::new(HookRunner::new(
+            None,
+            "test-session".to_string(),
+            PathBuf::from("/tmp"),
+        ));
+        (tools, permissions, task_store, background_runtime, hook_runner)
+    }
+
+    #[tokio::test]
+    async fn test_engine_creation() {
+        let settings = test_settings();
+        let (tools, permissions, task_store, bg, hooks) = test_engine_parts();
+        let engine = QueryEngine::new(
+            settings,
+            tools,
+            permissions,
+            PathBuf::from("/tmp"),
+            task_store,
+            bg,
+            hooks,
+        )
+        .await;
+        assert!(engine.is_ok());
+        let engine = engine.unwrap();
+        assert_eq!(engine.max_turns, 25);
+        assert_eq!(engine.budget_usd, None);
+    }
+
+    #[tokio::test]
+    async fn test_submit_message_returns_receiver() {
+        let settings = test_settings();
+        let (tools, permissions, task_store, bg, hooks) = test_engine_parts();
+        let engine = QueryEngine::new(
+            settings,
+            tools,
+            permissions,
+            PathBuf::from("/tmp"),
+            task_store,
+            bg,
+            hooks,
+        )
+        .await
+        .unwrap();
+
+        // submit_message should return a receiver immediately
+        // (it spawns the query loop in the background)
+        let result = engine
+            .submit_message(vec![ContentBlock::text("hello")])
+            .await;
+        assert!(result.is_ok());
+
+        let rx = result.unwrap();
+        // The spawned task will fail because there's no real API endpoint,
+        // but the receiver should still be returned. We'll get an Error event.
+        // Give the spawned task a moment to start
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // The receiver should have at least one event (either an error from the
+        // failed API call, or possibly nothing if the task hasn't started yet)
+        // Just verify the receiver exists and is usable
+        drop(rx);
+    }
+
+    #[tokio::test]
+    async fn test_submit_message_pushes_user_message() {
+        let settings = test_settings();
+        let (tools, permissions, task_store, bg, hooks) = test_engine_parts();
+        let engine = QueryEngine::new(
+            settings,
+            tools,
+            permissions,
+            PathBuf::from("/tmp"),
+            task_store,
+            bg,
+            hooks,
+        )
+        .await
+        .unwrap();
+
+        engine
+            .submit_message(vec![ContentBlock::text("test message")])
+            .await
+            .unwrap();
+
+        // The user message should be in the shared messages
+        let messages = engine.messages.lock().await;
+        assert_eq!(messages.len(), 1);
+        match &messages[0] {
+            Message::User(user_msg) => {
+                assert!(!user_msg.content.is_empty());
+            }
+            _ => panic!("Expected user message"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_shared_messages_between_engine_and_clone() {
+        let settings = test_settings();
+        let (tools, permissions, task_store, bg, hooks) = test_engine_parts();
+        let engine = QueryEngine::new(
+            settings,
+            tools,
+            permissions,
+            PathBuf::from("/tmp"),
+            task_store,
+            bg,
+            hooks,
+        )
+        .await
+        .unwrap();
+
+        // Clone shares the same messages Arc
+        let clone = engine.clone();
+        engine
+            .submit_message(vec![ContentBlock::text("shared test")])
+            .await
+            .unwrap();
+
+        // Clone should see the same messages
+        let messages = clone.messages.lock().await;
+        assert_eq!(messages.len(), 1);
+    }
+
+    #[test]
+    fn test_default_max_turns() {
+        let settings = test_settings();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (tools, permissions, task_store, bg, hooks) = test_engine_parts();
+        let engine = rt.block_on(QueryEngine::new(
+            settings,
+            tools,
+            permissions,
+            PathBuf::from("/tmp"),
+            task_store,
+            bg,
+            hooks,
+        ));
+        assert!(engine.is_ok());
+        assert_eq!(engine.unwrap().max_turns, 25);
+    }
+
+    #[test]
+    fn test_budget_usd_default_none() {
+        let settings = test_settings();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (tools, permissions, task_store, bg, hooks) = test_engine_parts();
+        let engine = rt.block_on(QueryEngine::new(
+            settings,
+            tools,
+            permissions,
+            PathBuf::from("/tmp"),
+            task_store,
+            bg,
+            hooks,
+        ));
+        assert!(engine.is_ok());
+        assert_eq!(engine.unwrap().budget_usd, None);
+    }
+}

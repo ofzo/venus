@@ -117,11 +117,11 @@ pub async fn run_repl(engine: &mut QueryEngine, skill_registry: Option<Arc<Skill
     Ok(())
 }
 
-pub async fn run_single_prompt(engine: &mut QueryEngine, prompt: &str) -> Result<()> {
+pub async fn run_single_prompt(engine: &QueryEngine, prompt: &str) -> Result<()> {
     submit_and_render(engine, prompt).await
 }
 
-async fn submit_and_render(engine: &mut QueryEngine, input: &str) -> Result<()> {
+async fn submit_and_render(engine: &QueryEngine, input: &str) -> Result<()> {
     // Run UserPromptSubmit hooks
     let effective_input;
     if let Ok(resp) = engine.hook_runner.run_user_prompt_submit(input).await {
@@ -146,13 +146,13 @@ async fn submit_and_render(engine: &mut QueryEngine, input: &str) -> Result<()> 
 
     let content = vec![ContentBlock::text(&effective_input)];
 
-    // submit_message runs the full query-tool loop and buffers events in the channel
+    // submit_message spawns the query loop and returns a streaming receiver
     let mut rx = engine.submit_message(content).await?;
 
     // Create a markdown renderer for this response
     let mut md = MarkdownRenderer::new();
 
-    // Drain all buffered events
+    // Drain all events from the streaming receiver
     while let Some(event) = rx.recv().await {
         render::render_event(&event, &mut md);
     }
@@ -162,19 +162,20 @@ async fn submit_and_render(engine: &mut QueryEngine, input: &str) -> Result<()> 
 
 async fn save_current_session(engine: &QueryEngine) {
     let now = chrono::Utc::now().timestamp() as u64;
+    let messages = engine.messages.lock().await;
     let meta = SessionMeta {
         id: engine.session_id.clone(),
         project: engine.working_dir.display().to_string(),
         created_at: engine.created_at,
         updated_at: now,
-        message_count: engine.messages.len(),
+        message_count: messages.len(),
         model: engine.model.clone(),
     };
-    let msg_values: Vec<serde_json::Value> = engine
-        .messages
+    let msg_values: Vec<serde_json::Value> = messages
         .iter()
         .filter_map(|m| serde_json::to_value(m).ok())
         .collect();
+    drop(messages);
     if let Err(e) = session::save_session(&engine.session_id, &meta, &msg_values).await {
         tracing::warn!("failed to save session: {}", e);
     }

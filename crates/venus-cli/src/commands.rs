@@ -37,7 +37,7 @@ pub async fn handle_command(
             CommandResult::Continue
         }
         "/clear" => {
-            engine.messages.clear();
+            engine.messages.lock().await.clear();
             eprintln!("  Conversation cleared.\n");
             CommandResult::Continue
         }
@@ -55,7 +55,7 @@ pub async fn handle_command(
             CommandResult::Continue
         }
         "/history" => {
-            let count = engine.messages.len();
+            let count = engine.messages.lock().await.len();
             eprintln!("  {} messages in conversation\n", count);
             CommandResult::Continue
         }
@@ -68,7 +68,7 @@ pub async fn handle_command(
             CommandResult::Continue
         }
         "/config" => {
-            handle_config(engine);
+            handle_config(engine).await;
             CommandResult::Continue
         }
         "/doctor" => {
@@ -76,7 +76,7 @@ pub async fn handle_command(
             CommandResult::Continue
         }
         "/context" => {
-            handle_context(engine);
+            handle_context(engine).await;
             CommandResult::Continue
         }
         "/tokens" => {
@@ -119,13 +119,6 @@ pub async fn handle_command(
                     eprintln!("  Error listing sessions: {}\n", e);
                 }
             }
-            CommandResult::Continue
-        }
-        "/plugin" | "/plugins" => {
-            eprintln!("\n  \x1b[1mInstalled plugins:\x1b[0m");
-            // Plugin info would be passed in from the registry
-            eprintln!("    (Plugin listing requires plugin registry to be passed to command handler)");
-            eprintln!("    Check ~/.claude/plugins/ and .claude/plugins/ for installed plugins.\n");
             CommandResult::Continue
         }
         "/resume" => {
@@ -224,7 +217,7 @@ pub async fn handle_command(
                         .filter_map(|v| serde_json::from_value(v.clone()).ok())
                         .collect();
                     let msg_count = messages.len();
-                    engine.messages = messages;
+                    *engine.messages.lock().await = messages;
                     engine.session_id = meta.id.clone();
                     engine.created_at = meta.created_at;
                     eprintln!(
@@ -555,8 +548,8 @@ async fn handle_diff(engine: &QueryEngine) {
 }
 
 /// Compact conversation using AI summarization, with fallback to naive truncation.
-async fn handle_compact(engine: &mut QueryEngine) {
-    let total = engine.messages.len();
+async fn handle_compact(engine: &QueryEngine) {
+    let total = engine.messages.lock().await.len();
 
     if total <= 4 {
         eprintln!("\n  Conversation has {} messages, nothing to compact.\n", total);
@@ -572,8 +565,9 @@ async fn handle_compact(engine: &mut QueryEngine) {
         &engine.base_url,
     );
 
+    let mut messages = engine.messages.lock().await;
     match venus_core::compact::compact_with_hooks(
-        &mut engine.messages,
+        &mut messages,
         &config,
         Some(&engine.hook_runner),
         &engine.session_id,
@@ -591,7 +585,7 @@ async fn handle_compact(engine: &mut QueryEngine) {
             // Fallback to naive compaction
             let keep = 10.min(total);
             let removed = total - keep;
-            engine.messages.drain(..removed);
+            messages.drain(..removed);
             eprintln!(
                 "  Fell back to keeping last {} messages (removed {}).\n",
                 keep, removed
@@ -601,14 +595,14 @@ async fn handle_compact(engine: &mut QueryEngine) {
 }
 
 /// Display current configuration.
-fn handle_config(engine: &QueryEngine) {
+async fn handle_config(engine: &QueryEngine) {
     let permission_mode = engine
         .settings
         .permission_mode
         .as_deref()
         .unwrap_or("default");
 
-    let total_usage = engine.cost_tracker.total_usage();
+    let total_usage = engine.cost_tracker.lock().unwrap().total_usage();
 
     eprintln!("\n  \x1b[1mConfiguration:\x1b[0m");
     eprintln!("    Model:           {}", engine.model);
@@ -616,6 +610,10 @@ fn handle_config(engine: &QueryEngine) {
     eprintln!("    Working dir:     {}", engine.working_dir.display());
     eprintln!("    Permission mode: {}", permission_mode);
     eprintln!("    Max tokens:      {}", engine.max_tokens);
+    eprintln!("    Max turns:       {}", engine.max_turns);
+    if let Some(budget) = engine.budget_usd {
+        eprintln!("    Budget:          ${:.2}", budget);
+    }
     eprintln!(
         "    Token usage:     {} input, {} output\n",
         total_usage.input_tokens + total_usage.cache_read_tokens,
@@ -652,9 +650,10 @@ async fn handle_doctor(engine: &QueryEngine) {
 }
 
 /// Display rich context analysis with token breakdown.
-fn handle_context(engine: &QueryEngine) {
+async fn handle_context(engine: &QueryEngine) {
+    let messages = engine.messages.lock().await;
     let analysis = venus_core::compact::analysis::analyze_context(
-        &engine.messages,
+        &messages,
         &engine.system_prompt,
     );
     let window = venus_utils::context_window::context_window_for_model(&engine.model);
@@ -715,12 +714,13 @@ fn handle_context(engine: &QueryEngine) {
 fn handle_tokens(engine: &QueryEngine) {
     eprintln!("\n  \x1b[1mToken breakdown:\x1b[0m");
 
-    if engine.cost_tracker.usage_by_model.is_empty() {
+    let tracker = engine.cost_tracker.lock().unwrap();
+    if tracker.usage_by_model.is_empty() {
         eprintln!("    No token usage recorded yet.\n");
         return;
     }
 
-    for (model, usage) in &engine.cost_tracker.usage_by_model {
+    for (model, usage) in &tracker.usage_by_model {
         eprintln!("    \x1b[33m{}\x1b[0m", model);
         eprintln!("      Input tokens:          {}", usage.input_tokens);
         eprintln!("      Output tokens:         {}", usage.output_tokens);
@@ -728,7 +728,7 @@ fn handle_tokens(engine: &QueryEngine) {
         eprintln!("      Cache creation tokens: {}", usage.cache_creation_tokens);
     }
 
-    let cost = engine.cost_tracker.format_cost();
+    let cost = tracker.format_cost();
     eprintln!("\n    Total cost: {}\n", cost);
 }
 

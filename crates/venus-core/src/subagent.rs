@@ -57,7 +57,7 @@ impl SubAgent {
             .unwrap_or_else(|| config.settings.effective_model().to_string());
         let max_tokens = config.settings.effective_max_tokens();
 
-        let mut engine = QueryEngine::new_for_subagent(
+        let engine = QueryEngine::new_for_subagent(
             config.auth_header,
             config.auth_value,
             model,
@@ -73,23 +73,24 @@ impl SubAgent {
             config.hook_runner,
         );
 
-        // Submit the prompt as a user message and run the query loop
+        // Submit the prompt as a user message and run the query loop.
+        // submit_message spawns the loop in the background and returns a receiver.
         let rx = engine
             .submit_message(vec![ContentBlock::text(&config.prompt)])
             .await?;
 
-        // We don't need to consume the stream events in real-time for sub-agents;
-        // the query loop has already completed by the time submit_message returns.
-        // Drain the receiver to avoid leaked channel warnings.
-        drop(rx);
+        // Drain all events until the spawned task completes.
+        // This ensures the query loop has finished before we read messages.
+        let mut rx = rx;
+        while rx.recv().await.is_some() {}
 
         // Extract the final assistant response text from message history.
-        // Walk backwards to find the last assistant message.
-        let output = extract_final_response(&engine.messages);
+        let messages = engine.messages.lock().await;
+        let output = extract_final_response(&messages);
 
         debug!(
             output_len = output.len(),
-            iterations = engine.messages.len(),
+            iterations = messages.len(),
             "sub-agent completed"
         );
 

@@ -107,7 +107,8 @@ pub fn render_event(event: &StreamEvent, md: &mut MarkdownRenderer) {
 pub fn print_cost(engine: &QueryEngine) {
     let stderr = io::stderr();
     let mut out = stderr.lock();
-    let cost = engine.cost_tracker.format_cost();
-    let tokens = engine.cost_tracker.format_tokens();
+    let tracker = engine.cost_tracker.lock().unwrap();
+    let cost = tracker.format_cost();
+    let tokens = tracker.format_tokens();
     let _ = write!(out, "{}  Cost: {} | Tokens: {}{}{}", NL, cost, tokens, NL, NL);
 }

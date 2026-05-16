@@ -40,6 +40,18 @@ pub struct Settings {
     /// MCP (Model Context Protocol) server configurations.
     #[serde(default)]
     pub mcp_servers: Option<HashMap<String, McpServerConfig>>,
+    /// Maximum agentic turns per query.
+    #[serde(default)]
+    pub max_turns: Option<u32>,
+    /// Maximum budget in USD.
+    #[serde(default)]
+    pub budget_usd: Option<f64>,
+    /// Allowed tools (if set, only these tools are permitted).
+    #[serde(default)]
+    pub allowed_tools: Option<Vec<String>>,
+    /// Disallowed tools (if set, these tools are denied).
+    #[serde(default)]
+    pub disallowed_tools: Option<Vec<String>>,
 }
 
 /// Extended thinking configuration.
@@ -241,6 +253,18 @@ impl Settings {
         }
         if other.mcp_servers.is_some() {
             self.mcp_servers = other.mcp_servers;
+        }
+        if other.max_turns.is_some() {
+            self.max_turns = other.max_turns;
+        }
+        if other.budget_usd.is_some() {
+            self.budget_usd = other.budget_usd;
+        }
+        if other.allowed_tools.is_some() {
+            self.allowed_tools = other.allowed_tools;
+        }
+        if other.disallowed_tools.is_some() {
+            self.disallowed_tools = other.disallowed_tools;
         }
     }
 
