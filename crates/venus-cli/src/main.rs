@@ -30,11 +30,11 @@ enum OutputFormat {
 #[command(name = "venus", about = "Venus - AI coding assistant")]
 struct Cli {
     /// Model to use
-    #[arg(short, long, env = "ANTHROPIC_MODEL")]
+    #[arg(short, long)]
     model: Option<String>,
 
-    /// API key
-    #[arg(short = 'k', long, env = "ANTHROPIC_API_KEY")]
+    /// API key (for quick setup, prefer config file)
+    #[arg(short = 'k', long)]
     api_key: Option<String>,
 
     /// Non-interactive mode: run a single prompt

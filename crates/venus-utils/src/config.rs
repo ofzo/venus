@@ -57,10 +57,6 @@ pub struct Settings {
     #[serde(default)]
     pub always_deny: Option<Vec<PermissionRule>>,
 
-    /// Environment variables to inject.
-    #[serde(default)]
-    pub env: Option<HashMap<String, String>>,
-
     /// Provider configurations (name -> config).
     #[serde(default)]
     pub provider: Option<HashMap<String, ProviderConfig>>,
@@ -201,7 +197,7 @@ impl Settings {
     }
 
     /// Load settings with multi-level merging.
-    /// Merge order: defaults → ~/.venus/config.toml → project .venus/config.toml → env vars
+    /// Merge order: defaults → ~/.venus/config.toml → project .venus/config.toml
     pub fn load_with_project(project_root: Option<&std::path::Path>) -> Result<Self> {
         let mut settings = Settings::default();
 
@@ -225,55 +221,6 @@ impl Settings {
                 settings.merge(file_settings);
                 debug!("loaded project settings from {:?}", project_path);
             }
-        }
-
-        // 3. Apply configured env vars to the process environment.
-        if let Some(ref env_map) = settings.env {
-            for (key, value) in env_map {
-                std::env::set_var(key, value);
-                debug!("set env var from config: {}={}", key, value);
-            }
-        }
-
-        // 4. Process environment variables (highest priority)
-        if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
-            // Set on the active provider or create a default one
-            settings
-                .provider
-                .get_or_insert_with(HashMap::new)
-                .entry("anthropic".to_string())
-                .or_insert_with(|| ProviderConfig {
-                    provider_type: "anthropic".to_string(),
-                    api_key: None,
-                    auth_token: None,
-                    base_url: None,
-                    default_model: None,
-                    max_tokens: None,
-                    api_version: None,
-                })
-                .api_key = Some(key);
-            if settings.active_provider.is_none() {
-                settings.active_provider = Some("anthropic".to_string());
-            }
-        }
-        if let Ok(token) = std::env::var("VENUS_OAUTH_TOKEN")
-            .or_else(|_| std::env::var("ANTHROPIC_AUTH_TOKEN"))
-        {
-            if let Some(ref mut providers) = settings.provider {
-                if let Some(p) = providers.get_mut("anthropic") {
-                    p.auth_token = Some(token);
-                }
-            }
-        }
-        if let Ok(url) = std::env::var("ANTHROPIC_BASE_URL") {
-            if let Some(ref mut providers) = settings.provider {
-                if let Some(p) = providers.get_mut("anthropic") {
-                    p.base_url = Some(url);
-                }
-            }
-        }
-        if let Ok(model) = std::env::var("ANTHROPIC_MODEL") {
-            settings.model = Some(model);
         }
 
         Ok(settings)
@@ -315,11 +262,6 @@ impl Settings {
         }
         if other.always_deny.is_some() {
             self.always_deny = other.always_deny;
-        }
-        if let Some(other_env) = other.env {
-            self.env
-                .get_or_insert_with(HashMap::new)
-                .extend(other_env);
         }
         if let Some(other_providers) = other.provider {
             self.provider

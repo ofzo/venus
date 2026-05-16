@@ -864,9 +864,6 @@ impl QueryEngine {
 
     /// Build the thinking parameter for the API request, if applicable.
     fn build_thinking_param(&self) -> Option<serde_json::Value> {
-        if std::env::var("VENUS_DISABLE_THINKING").is_ok() {
-            return None;
-        }
         if !context_window::model_supports_thinking(&self.model) {
             return None;
         }
