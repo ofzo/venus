@@ -67,12 +67,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             if i > 0 { spans.push(Span::raw(" ")); } // gap=1
             if i == tab_state.selected_tab {
                 // Current tab: inverse + bold (matching Claude Code's Tabs component)
+                // Ink's `inverse={true}` = ratatui's Modifier::REVERSED
                 spans.push(Span::styled(
                     format!(" {} ", tab),
                     Style::default()
-                        .fg(Color::Black) // inverse text color
-                        .bg(title_color)   // background = pane color
-                        .add_modifier(Modifier::BOLD),
+                        .add_modifier(Modifier::REVERSED | Modifier::BOLD),
                 ));
             } else {
                 // Non-current tab: no special styling
@@ -310,8 +309,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             format!("Esc to cancel")
         }
         PickerSource::Config => {
-            // Config footer: "Space change  Enter save  / search  Esc cancel"
-            format!("Space change  Enter save  / search  Esc cancel")
+            // Config footer (Byline format): "Space to change · Enter to save · / to search · Esc to cancel"
+            format!("Space to change {} Enter to save {} / to search {} Esc to cancel", MIDDOT, MIDDOT, MIDDOT)
         }
         PickerSource::Model => {
             // ModelPicker footer: italic, dimColor

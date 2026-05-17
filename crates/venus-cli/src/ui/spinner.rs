@@ -22,10 +22,10 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let glyph = app.spinner_glyph();
     let message = app.spinner.display_message();
 
-    // Claude Code: glyph is 2 chars wide, then message immediately after (no gap)
+    // Claude Code: glyph Box width=2 (char + padding), then message immediately after
     let line = Line::from(vec![
         Span::styled(
-            format!(" {} ", glyph), // 2 chars wide with padding
+            format!(" {}", glyph), // 2 chars: space + char (matching Ink Box width=2)
             Style::default().fg(Color::Cyan),
         ),
         Span::styled(
