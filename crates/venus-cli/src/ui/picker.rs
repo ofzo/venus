@@ -248,19 +248,43 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         current_y += 1;
     }
 
-    // 6. Footer
+    // 5b. Help dialog: "For more help:" link
+    if matches!(picker.source, PickerSource::Help) {
+        let link_area = Rect::new(content_x, current_y, content_width, 1);
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::raw("For more help: "),
+                Span::styled("https://code.claude.com/docs/en/overview", Style::default().fg(Color::Cyan)),
+            ])),
+            link_area,
+        );
+        current_y += 1;
+    }
+
+    // 6. Footer (matching Claude Code's Byline + KeyboardShortcutHint)
     let hint_area = Rect::new(content_x, current_y, content_width, 1);
-    let footer_text = if is_model_picker {
-        // italic, dimColor: "Enter to confirm · Esc to exit"
-        format!("{} to confirm {} {} to exit", "Enter", MIDDOT, "Esc")
-    } else {
-        format!("{} to confirm {} {} to cancel", "Enter", MIDDOT, "Esc")
+    let footer_text = match picker.source {
+        PickerSource::Help => {
+            // Help footer: italic, dimColor: "Esc to cancel"
+            format!("Esc to cancel")
+        }
+        PickerSource::Config => {
+            // Config footer: "Space change  Enter save  / search  Esc cancel"
+            format!("Space change  Enter save  / search  Esc cancel")
+        }
+        PickerSource::Model => {
+            // ModelPicker footer: italic, dimColor
+            format!("{} to confirm {} {} to exit", "Enter", MIDDOT, "Esc")
+        }
+        _ => {
+            format!("{} to confirm {} {} to cancel", "Enter", MIDDOT, "Esc")
+        }
     };
-    let footer_style = Style::default().fg(Color::DarkGray);
-    let footer_style = if is_model_picker {
-        footer_style.add_modifier(Modifier::ITALIC)
-    } else {
-        footer_style
+    let footer_style = match picker.source {
+        PickerSource::Help | PickerSource::Model => {
+            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)
+        }
+        _ => Style::default().fg(Color::DarkGray),
     };
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(footer_text, footer_style))),
