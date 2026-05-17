@@ -6,48 +6,31 @@ use ratatui::{
 use crate::app::{App, InputMode};
 
 /// Unicode figures
-const POINTER: &str = "\u{276F}"; // ❯ (Claude Code's figures.pointer)
+const POINTER: &str = "\u{276F}"; // ❯
 
 /// Render the input area matching Claude Code's PromptInput exactly.
 ///
-/// Layout:
-///   marginTop=1 (blank line above)
-///   ─── top border (round style) ───
-///   ❯ user input text here
-///   ─── bottom border (round style) ───
+/// Claude Code layout:
+///   Box marginTop={1}
+///   Box borderStyle="round" borderLeft=false borderRight=false borderBottom
+///     ❯ user input text
+///   PromptInputFooter
 ///
-/// Claude Code uses borderStyle="round" with borderLeft=false, borderRight=false
-/// So only top and bottom borders are shown.
+/// Key: ONLY bottom border is shown (not top, not left, not right).
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
-    // marginTop=1 matching PromptInput's outer Box
-    let input_area = Rect {
-        x: area.x,
-        y: area.y,
-        width: area.width,
-        height: area.height,
-    };
-
     let border_color = match app.input_mode {
         InputMode::Streaming => Color::Yellow,
-        InputMode::Normal => Color::DarkGray, // 'promptBorder' theme color
+        InputMode::Normal => Color::DarkGray,
         InputMode::PermissionPrompt => Color::Yellow,
         InputMode::Picker => Color::DarkGray,
         InputMode::HistorySearch => Color::Yellow,
-    };
-
-    let title = match app.input_mode {
-        InputMode::Streaming => " streaming\u{2026} (Ctrl+C to cancel) ",
-        InputMode::Normal => " ",
-        InputMode::PermissionPrompt => " permission required ",
-        InputMode::Picker => " pick an option ",
-        InputMode::HistorySearch => " history search ",
     };
 
     // Build input content with prompt character
     let prompt_char = match app.input_mode {
         InputMode::Streaming => Span::styled(
             format!("{} ", POINTER),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(Color::DarkGray), // dimColor when loading
         ),
         _ => Span::styled(
             format!("{} ", POINTER),
@@ -73,24 +56,20 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         ])
     };
 
-    // Claude Code: borderStyle="round", borderLeft=false, borderRight=false
-    // This means only top and bottom borders are shown
+    // Claude Code: borderStyle="round", borderLeft=false, borderRight=false, borderBottom=true
+    // Only BOTTOM border is shown
     let block = Block::default()
-        .borders(Borders::TOP | Borders::BOTTOM)
+        .borders(Borders::BOTTOM) // ONLY bottom border
         .border_style(Style::default().fg(border_color))
-        .title(Span::styled(
-            title,
-            Style::default().fg(Color::DarkGray),
-        ));
+        .border_type(BorderType::Rounded);
 
     let paragraph = Paragraph::new(input_text).block(block);
-    frame.render_widget(paragraph, input_area);
+    frame.render_widget(paragraph, area);
 
     // Show cursor in normal mode only
     if app.input_mode == InputMode::Normal {
-        // Cursor position: prompt char (2 chars) + cursor_pos
-        let cursor_x = input_area.x + 2 + (app.input.cursor_pos as u16).min(input_area.width.saturating_sub(4));
-        let cursor_y = input_area.y + 1; // inside the border
+        let cursor_x = area.x + 2 + (app.input.cursor_pos as u16).min(area.width.saturating_sub(3));
+        let cursor_y = area.y;
         frame.set_cursor_position((cursor_x, cursor_y));
     }
 
@@ -105,8 +84,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             .max()
             .unwrap_or(10)
             + 2;
-        let popup_y = input_area.y.saturating_sub(popup_height);
-        let popup_area = Rect::new(input_area.x + 2, popup_y, popup_width, popup_height);
+        let popup_y = area.y.saturating_sub(popup_height);
+        let popup_area = Rect::new(area.x + 2, popup_y, popup_width, popup_height);
 
         let items: Vec<ListItem> = app
             .input

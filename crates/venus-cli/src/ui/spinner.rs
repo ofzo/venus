@@ -8,32 +8,75 @@ use crate::app::App;
 /// Render the spinner matching Claude Code's SpinnerAnimationRow exactly.
 ///
 /// Layout:
-///   [2-char glyph][message...] (no gap between glyph and message)
-///   marginTop=1 (1 row above spinner)
+///   marginTop=1 (blank line above)
+///   [2-char glyph][message…] (status)
+///
+/// Status format: (elapsed · tokens · thinking)
+/// All dimColor
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     // marginTop=1 matching SpinnerAnimationRow
     let spinner_area = Rect {
         x: area.x,
-        y: area.y + area.height.saturating_sub(2), // 2 rows from bottom (1 for margin + 1 for content)
+        y: area.y + area.height.saturating_sub(2),
         width: area.width,
         height: 1,
     };
 
     let glyph = app.spinner_glyph();
-    let message = app.spinner.display_message();
+    let verb = crate::app::SPINNER_VERBS[app.spinner.verb_index % crate::app::SPINNER_VERBS.len()];
+    let elapsed = app.spinner.elapsed_secs();
 
-    // Claude Code: glyph Box width=2 (char + padding), then message immediately after
-    let line = Line::from(vec![
+    // Build status parts (matching Claude Code's parenthesized format)
+    let mut status_parts = Vec::new();
+
+    // Timer (shows after some time)
+    if elapsed > 5 {
+        status_parts.push(format!("{}s", elapsed));
+    }
+
+    // Token count (if available)
+    let cost_tracker = app.engine.cost_tracker.lock().unwrap();
+    let total_tokens = cost_tracker.total_usage().input_tokens
+        + cost_tracker.total_usage().cache_read_tokens
+        + cost_tracker.total_usage().output_tokens;
+    drop(cost_tracker);
+
+    if total_tokens > 0 {
+        status_parts.push(format!("\u{2193} {} tokens", format_token_count(total_tokens))); // ↓
+    }
+
+    // Build the full line
+    let mut spans = vec![
+        // Glyph (2 chars wide)
         Span::styled(
-            format!(" {}", glyph), // 2 chars: space + char (matching Ink Box width=2)
+            format!(" {}", glyph),
             Style::default().fg(Color::Cyan),
         ),
+        // Message verb + ellipsis
         Span::styled(
-            message,
+            format!("{}\u{2026}", verb),
             Style::default().fg(Color::DarkGray),
         ),
-    ]);
+    ];
 
-    let paragraph = Paragraph::new(line);
-    frame.render_widget(paragraph, spinner_area);
+    // Status in parentheses (if any parts exist)
+    if !status_parts.is_empty() {
+        spans.push(Span::styled(
+            format!(" ({})", status_parts.join(" \u{00B7} ")), // · separator
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+
+    let line = Line::from(spans);
+    frame.render_widget(Paragraph::new(line), spinner_area);
+}
+
+fn format_token_count(n: u64) -> String {
+    if n >= 1_000_000 {
+        format!("{:.1}M", n as f64 / 1_000_000.0)
+    } else if n >= 1_000 {
+        format!("{:.1}K", n as f64 / 1_000.0)
+    } else {
+        format!("{}", n)
+    }
 }

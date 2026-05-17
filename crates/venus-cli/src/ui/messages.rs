@@ -24,9 +24,21 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                 for segment in segments {
                     match segment {
                         RenderSegment::Text(text) => {
-                            // Parse markdown with code block support
+                            // Claude Code: BLACK_CIRCLE prefix with minWidth=2
+                            // when shouldShowDot is true (during streaming or first block)
                             let rendered = render_markdown_with_code_blocks(text);
-                            lines.extend(rendered);
+                            for (i, line) in rendered.into_iter().enumerate() {
+                                if i == 0 {
+                                    // First line gets the ⏺ prefix
+                                    let mut spans = vec![
+                                        Span::styled("\u{23FA} ", Style::default().fg(Color::DarkGray)), // ⏺
+                                    ];
+                                    spans.extend(line.spans);
+                                    lines.push(Line::from(spans));
+                                } else {
+                                    lines.push(line);
+                                }
+                            }
                         }
                     }
                 }
@@ -38,29 +50,46 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                 is_error,
                 summary,
             } => {
-                // Claude Code uses ⏺ (U+23FA) for tool calls
-                let mut header = vec![
-                    Span::styled("  \u{23FA} ", Style::default().fg(Color::Cyan)),
-                    Span::styled(
-                        name.clone(),
-                        Style::default()
-                            .fg(Color::Cyan)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                ];
-                if !activity.is_empty() {
-                    header.push(Span::styled(
-                        format!(": {}", activity),
-                        Style::default().fg(Color::DarkGray),
-                    ));
-                }
-                lines.push(Line::from(header));
+                // Claude Code's AssistantToolUseMessage rendering:
+                // Queued:    ⏺ bold_tool_name (message)
+                // In-progress: <spinner> bold_tool_name (message)
+                // Resolved:  tool_name (message)
 
-                if !summary.is_empty() {
+                if summary.is_empty() {
+                    // Queued/In-progress state: ⏺ bold_tool_name (activity)
+                    let mut header = vec![
+                        Span::styled("\u{23FA} ", Style::default().fg(Color::DarkGray)), // ⏺ dimmed
+                        Span::styled(
+                            name.clone(),
+                            Style::default()
+                                .fg(Color::White)
+                                .bg(Color::DarkGray) // backgroundColor
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                    ];
+                    if !activity.is_empty() {
+                        header.push(Span::styled(
+                            format!(" ({})", activity),
+                            Style::default().fg(Color::DarkGray),
+                        ));
+                    }
+                    lines.push(Line::from(header));
+                } else {
+                    // Resolved state: tool_name (summary)
+                    // No icon prefix, just tool name and result
                     let color = if *is_error { Color::Red } else { Color::Green };
                     lines.push(Line::from(vec![
-                        Span::styled("  \u{23FA} ", Style::default().fg(color)),
-                        Span::styled(summary.clone(), Style::default().fg(Color::DarkGray)),
+                        Span::styled(
+                            name.clone(),
+                            Style::default()
+                                .fg(Color::White)
+                                .bg(Color::DarkGray)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(
+                            format!(" ({})", summary),
+                            Style::default().fg(Color::DarkGray),
+                        ),
                     ]));
                 }
                 lines.push(Line::from(""));

@@ -20,7 +20,7 @@ use venus_permissions::tui_handler::{PermissionRequest, PermissionResponse};
 const SPINNER_FRAMES: &[&str] = &["\u{00B7}", "\u{2722}", "\u{2733}", "\u{2736}", "\u{273B}", "\u{273D}", "\u{273B}", "\u{2736}", "\u{2733}", "\u{2722}", "\u{00B7}", "\u{00B7}"];
 
 /// Random verbs shown during spinner (matching Claude Code's behavior).
-const SPINNER_VERBS: &[&str] = &[
+pub const SPINNER_VERBS: &[&str] = &[
     "Thinking", "Processing", "Analyzing", "Computing", "Working",
     "Reasoning", "Planning", "Searching", "Reading", "Writing",
 ];
