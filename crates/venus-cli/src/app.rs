@@ -993,38 +993,40 @@ impl App {
         });
     }
 
-    /// Open the model picker overlay.
+    /// Open the model picker overlay matching Claude Code's ModelPicker.
     fn open_model_picker(&mut self) {
         let current_effort = self.get_effort_label();
         let models = vec![
             PickerItem {
                 label: "claude-opus-4-20250514".into(),
-                description: format!("Most capable | effort: {}", current_effort),
+                description: "Most capable, highest cost".into(),
                 value: "claude-opus-4-20250514".into(),
             },
             PickerItem {
                 label: "claude-sonnet-4-20250514".into(),
-                description: format!("Balanced | effort: {}", current_effort),
+                description: "Balanced capability and cost".into(),
                 value: "claude-sonnet-4-20250514".into(),
             },
             PickerItem {
                 label: "claude-haiku-4-5-20251001".into(),
-                description: format!("Fastest | effort: {}", current_effort),
+                description: "Fastest, lowest cost".into(),
                 value: "claude-haiku-4-5-20251001".into(),
             },
         ];
         let current = &self.engine.model;
-        let mut picker = PickerState::new("Select Model (←→ adjust effort)".into(), models, PickerSource::Model);
+        let mut picker = PickerState::new("Select model".into(), models, PickerSource::Model);
         if let Some(idx) = picker.items.iter().position(|i| &i.value == current) {
             picker.selected = idx;
             picker.scroll_offset = idx.saturating_sub(picker.visible_count / 2);
         }
+        // Store effort info for display
+        picker.visible_count = 10; // Claude Code shows up to 10 items
         self.picker = Some(picker);
         self.input_mode = InputMode::Picker;
     }
 
     /// Get current effort level label.
-    fn get_effort_label(&self) -> &str {
+    pub fn get_effort_label(&self) -> &str {
         match self.engine.settings.thinking.as_ref().and_then(|t| t.budget_tokens) {
             Some(0..=1024) => "low",
             Some(1025..=4096) => "medium",

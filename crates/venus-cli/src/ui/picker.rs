@@ -3,7 +3,7 @@ use ratatui::{
     widgets::*,
 };
 
-use crate::app::App;
+use crate::app::{App, PickerSource};
 
 /// Render a picker/list selection overlay centered on the screen.
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
@@ -24,8 +24,12 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         .max(picker.title.chars().count() as u16 + 4);
     let popup_width = (max_label_width + 6).min(area.width.saturating_sub(4)).max(30);
     let visible_count = picker.visible_count.min(picker.items.len()) as u16;
-    // +2 for borders, +1 for hint footer
-    let popup_height = (visible_count + 3).min(area.height.saturating_sub(2));
+
+    // Extra lines for model picker (effort display)
+    let extra_lines = if matches!(picker.source, PickerSource::Model) { 2 } else { 0 };
+
+    // +2 for borders, +1 for hint footer, +extra for model picker
+    let popup_height = (visible_count + 3 + extra_lines).min(area.height.saturating_sub(2));
 
     let x = (area.width.saturating_sub(popup_width)) / 2;
     let y = (area.height.saturating_sub(popup_height)) / 2;
@@ -87,10 +91,10 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 
     let title = format!(" {}{} ", picker.title, scroll_info);
 
-    // Split popup into list area and hint area
-    let list_height = popup_height.saturating_sub(1);
+    // Split popup into list area, effort area (for model picker), and hint area
+    let list_height = popup_height.saturating_sub(1 + extra_lines);
     let list_area = Rect::new(popup_area.x, popup_area.y, popup_width, list_height);
-    let hint_area = Rect::new(popup_area.x, popup_area.y + list_height, popup_width, 1);
+    let hint_area = Rect::new(popup_area.x, popup_area.y + popup_height - 1, popup_width, 1);
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -102,6 +106,25 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 
     let list = List::new(items).block(block);
     frame.render_widget(list, list_area);
+
+    // Render effort display for model picker (matching Claude Code's ModelPicker)
+    if matches!(picker.source, PickerSource::Model) && extra_lines > 0 {
+        let effort_area = Rect::new(popup_area.x, popup_area.y + list_height, popup_width, extra_lines);
+        let effort = app.get_effort_label();
+        let effort_indicator = match effort {
+            "low" => "○",
+            "medium" => "◐",
+            "high" => "●",
+            "max" => "◉",
+            _ => "○",
+        };
+        let effort_text = format!("  {} {} effort  ← → to adjust", effort_indicator, effort);
+        let effort_paragraph = Paragraph::new(Line::from(vec![
+            Span::styled(effort_text, Style::default().fg(Color::DarkGray)),
+        ]))
+        .style(Style::default().bg(Color::Black));
+        frame.render_widget(effort_paragraph, effort_area);
+    }
 
     // Render keyboard hint at bottom
     let hint = Paragraph::new(Line::from(vec![
