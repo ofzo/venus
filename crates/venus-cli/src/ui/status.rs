@@ -39,6 +39,21 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         ));
     }
 
+    // Permission mode indicator
+    let perm_mode = app.engine.settings.permission_mode.as_deref().unwrap_or("default");
+    if perm_mode != "default" {
+        spans.push(Span::raw(" │ "));
+        let (perm_label, perm_color) = match perm_mode {
+            "auto" => ("auto", Color::Yellow),
+            "bypass" => ("bypass", Color::Red),
+            _ => (perm_mode, Color::DarkGray),
+        };
+        spans.push(Span::styled(
+            perm_label,
+            Style::default().fg(perm_color).add_modifier(Modifier::BOLD),
+        ));
+    }
+
     if let Some(ref branch) = app.branch {
         spans.push(Span::raw(" │ "));
         spans.push(Span::styled(

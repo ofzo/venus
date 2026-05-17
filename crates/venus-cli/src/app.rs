@@ -303,6 +303,17 @@ impl App {
                 }
                 return Ok(());
             }
+            // Ctrl+S - stash current prompt (save to history without submitting)
+            (KeyModifiers::CONTROL, KeyCode::Char('s')) => {
+                if self.input_mode == InputMode::Normal && !self.input.buffer.is_empty() {
+                    self.input.history.push(self.input.buffer.clone());
+                    self.messages.push(DisplayMessage::Status {
+                        text: "Prompt stashed (use Up arrow to recall)".to_string(),
+                    });
+                    self.input.clear();
+                }
+                return Ok(());
+            }
             _ => {}
         }
 
