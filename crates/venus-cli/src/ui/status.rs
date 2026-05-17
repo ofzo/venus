@@ -24,12 +24,38 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         ));
     }
 
+    if app.context_pct > 0 {
+        spans.push(Span::raw(" │ "));
+        let ctx_color = if app.context_pct > 80 {
+            Color::Red
+        } else if app.context_pct > 60 {
+            Color::Yellow
+        } else {
+            Color::Green
+        };
+        spans.push(Span::styled(
+            format!("{}% ctx", app.context_pct),
+            Style::default().fg(ctx_color),
+        ));
+    }
+
     if let Some(ref branch) = app.branch {
         spans.push(Span::raw(" │ "));
         spans.push(Span::styled(
             format!("({})", branch),
             Style::default().fg(Color::DarkGray),
         ));
+    }
+
+    if app.spinner.active {
+        let elapsed = app.spinner.elapsed_secs();
+        if elapsed > 0 {
+            spans.push(Span::raw(" │ "));
+            spans.push(Span::styled(
+                format_elapsed(elapsed),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
     }
 
     let status_line = Line::from(spans);
@@ -40,4 +66,12 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     );
 
     frame.render_widget(paragraph, area);
+}
+
+fn format_elapsed(secs: u64) -> String {
+    if secs < 60 {
+        format!("{}s", secs)
+    } else {
+        format!("{}m{}s", secs / 60, secs % 60)
+    }
 }

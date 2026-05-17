@@ -1,12 +1,13 @@
 pub mod input;
 pub mod messages;
 pub mod modal;
+pub mod picker;
 pub mod spinner;
 pub mod status;
 
-use ratatui::Frame;
+use ratatui::prelude::*;
 
-use crate::app::App;
+use crate::app::{App, InputMode};
 
 /// Render the full TUI layout.
 pub fn render(frame: &mut Frame, app: &App) {
@@ -36,10 +37,61 @@ pub fn render(frame: &mut Frame, app: &App) {
     // Render input area
     input::render(frame, input_area, app);
 
-    // Render permission modal overlay (if active)
-    if app.input_mode == crate::app::InputMode::PermissionPrompt {
-        if let Some(ref pending) = app.pending_permission {
-            modal::render(frame, area, &pending.tool_name, &pending.description);
+    // Render overlays based on input mode
+    match app.input_mode {
+        InputMode::PermissionPrompt => {
+            if let Some(ref pending) = app.pending_permission {
+                modal::render(frame, area, &pending.tool_name, &pending.description);
+            }
         }
+        InputMode::Picker => {
+            picker::render(frame, area, app);
+        }
+        InputMode::HistorySearch => {
+            render_history_search(frame, input_area, app);
+        }
+        _ => {}
     }
+}
+
+/// Render history search results below the input area.
+fn render_history_search(frame: &mut Frame, area: Rect, app: &App) {
+    let matches = app.history_search_matches();
+    if matches.is_empty() {
+        return;
+    }
+
+    let popup_height = (matches.len() as u16 + 1).min(6);
+    let popup_width = area.width.saturating_sub(2);
+    let popup_y = area.y.saturating_sub(popup_height);
+    let popup_area = Rect::new(area.x + 1, popup_y, popup_width, popup_height);
+
+    let items: Vec<ratatui::widgets::ListItem> = matches
+        .iter()
+        .map(|entry| {
+            let display = if entry.len() > 60 {
+                format!("{}...", &entry[..57])
+            } else {
+                entry.to_string()
+            };
+            ratatui::widgets::ListItem::new(ratatui::text::Line::from(vec![
+                ratatui::text::Span::styled("  ", ratatui::style::Style::default()),
+                ratatui::text::Span::raw(display),
+            ]))
+        })
+        .collect();
+
+    let list = ratatui::widgets::List::new(items).block(
+        ratatui::widgets::Block::default()
+            .borders(ratatui::widgets::Borders::ALL)
+            .border_style(ratatui::style::Style::default().fg(ratatui::style::Color::Yellow))
+            .title(ratatui::text::Span::styled(
+                " History Search ",
+                ratatui::style::Style::default()
+                    .fg(ratatui::style::Color::Yellow)
+                    .add_modifier(ratatui::style::Modifier::BOLD),
+            )),
+    );
+
+    frame.render_widget(list, popup_area);
 }

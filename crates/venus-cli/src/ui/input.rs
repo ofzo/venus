@@ -11,22 +11,32 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         InputMode::Streaming => Style::default().fg(Color::Yellow),
         InputMode::Normal => Style::default().fg(Color::Cyan),
         InputMode::PermissionPrompt => Style::default().fg(Color::Yellow),
+        InputMode::Picker => Style::default().fg(Color::Cyan),
+        InputMode::HistorySearch => Style::default().fg(Color::Yellow),
     };
 
     let title = match app.input_mode {
         InputMode::Streaming => " streaming... (Ctrl+C to cancel) ",
         InputMode::Normal => " enter message (Alt+Enter for newline) ",
         InputMode::PermissionPrompt => " permission required ",
+        InputMode::Picker => " pick an option (↑↓ navigate, Enter select, Esc cancel) ",
+        InputMode::HistorySearch => " history search (type to filter, Enter accept, Esc cancel) ",
     };
 
     let input_text = if app.input.buffer.is_empty() && app.input_mode == InputMode::Normal {
         // Show placeholder
-        Span::styled(
+        Line::from(Span::styled(
             "Type a message...",
             Style::default().fg(Color::DarkGray),
-        )
+        ))
+    } else if let Some(ref ghost) = app.input.ghost_text {
+        // Show buffer + ghost text
+        Line::from(vec![
+            Span::raw(app.input.buffer.clone()),
+            Span::styled(ghost.clone(), Style::default().fg(Color::DarkGray)),
+        ])
     } else {
-        Span::raw(app.input.buffer.clone())
+        Line::from(Span::raw(app.input.buffer.clone()))
     };
 
     let paragraph = Paragraph::new(input_text).block(

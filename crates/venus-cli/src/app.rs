@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
@@ -33,12 +34,73 @@ pub enum DisplayMessage {
     Status { text: String },
 }
 
+/// A single item in a picker list.
+#[derive(Clone, Debug)]
+pub struct PickerItem {
+    pub label: String,
+    pub description: String,
+    pub value: String,
+}
+
+/// Which picker is currently active.
+#[derive(Clone, Debug)]
+pub enum PickerSource {
+    Model,
+    Theme,
+    Help,
+    Resume(Vec<venus_utils::session::SessionMeta>),
+    Permissions,
+    Effort,
+    Skills(Vec<String>),
+}
+
+/// State for an active picker/list selection overlay.
+pub struct PickerState {
+    pub title: String,
+    pub items: Vec<PickerItem>,
+    pub selected: usize,
+    pub scroll_offset: usize,
+    pub source: PickerSource,
+    pub visible_count: usize,
+}
+
+impl PickerState {
+    pub fn new(title: String, items: Vec<PickerItem>, source: PickerSource) -> Self {
+        let visible_count = items.len().min(10);
+        Self { title, items, selected: 0, scroll_offset: 0, source, visible_count }
+    }
+
+    pub fn move_up(&mut self) {
+        if self.selected > 0 {
+            self.selected -= 1;
+            if self.selected < self.scroll_offset {
+                self.scroll_offset = self.selected;
+            }
+        }
+    }
+
+    pub fn move_down(&mut self) {
+        if self.selected + 1 < self.items.len() {
+            self.selected += 1;
+            if self.selected >= self.scroll_offset + self.visible_count {
+                self.scroll_offset = self.selected - self.visible_count + 1;
+            }
+        }
+    }
+
+    pub fn selected_item(&self) -> Option<&PickerItem> {
+        self.items.get(self.selected)
+    }
+}
+
 /// Input mode determines how key events are handled.
 #[derive(PartialEq, Eq)]
 pub enum InputMode {
     Normal,
     Streaming,
     PermissionPrompt,
+    Picker,
+    HistorySearch,
 }
 
 /// A pending permission request shown as a modal.
@@ -53,6 +115,13 @@ pub struct SpinnerState {
     pub frame: usize,
     pub message: String,
     pub active: bool,
+    pub started_at: Option<Instant>,
+}
+
+impl SpinnerState {
+    pub fn elapsed_secs(&self) -> u64 {
+        self.started_at.map(|t| t.elapsed().as_secs()).unwrap_or(0)
+    }
 }
 
 /// Top-level TUI application state.
@@ -74,6 +143,14 @@ pub struct App {
     pub event_tx: mpsc::UnboundedSender<AppEvent>,
     /// Pending permission request (shown as modal).
     pub pending_permission: Option<PendingPermission>,
+    /// Active picker/list selection overlay.
+    pub picker: Option<PickerState>,
+    /// Double-press tracking for Ctrl+C (timestamp of first press).
+    pub ctrl_c_first: Option<Instant>,
+    /// Double-press tracking for Esc (timestamp of first press).
+    pub esc_first: Option<Instant>,
+    /// Context window usage percentage.
+    pub context_pct: u64,
 }
 
 impl App {
@@ -91,7 +168,7 @@ impl App {
             messages: Vec::new(),
             input: InputState::new(),
             input_mode: InputMode::Normal,
-            spinner: SpinnerState { frame: 0, message: String::new(), active: false },
+            spinner: SpinnerState { frame: 0, message: String::new(), active: false, started_at: None },
             scroll_offset: 0,
             auto_scroll: true,
             cost,
@@ -102,6 +179,10 @@ impl App {
             plugin_registry,
             event_tx,
             pending_permission: None,
+            picker: None,
+            ctrl_c_first: None,
+            esc_first: None,
+            context_pct: 0,
         }
     }
 
@@ -124,7 +205,7 @@ impl App {
 
     /// Handle a keyboard event.
     pub async fn handle_key(&mut self, key: KeyEvent) -> Result<()> {
-        // Global shortcuts
+        // Global shortcuts (work in all modes)
         match (key.modifiers, key.code) {
             (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
                 if self.input_mode == InputMode::Streaming {
@@ -134,16 +215,119 @@ impl App {
                     self.messages.push(DisplayMessage::Status {
                         text: "cancelled".to_string(),
                     });
+                    return Ok(());
+                } else if self.input_mode == InputMode::Picker {
+                    self.picker = None;
+                    self.input_mode = InputMode::Normal;
+                    return Ok(());
                 } else {
-                    self.should_quit = true;
+                    // Double-press: first press warns, second press exits
+                    let now = Instant::now();
+                    if let Some(first) = self.ctrl_c_first {
+                        if now.duration_since(first).as_millis() < 1500 {
+                            self.should_quit = true;
+                            return Ok(());
+                        }
+                    }
+                    self.ctrl_c_first = Some(now);
+                    if !self.input.buffer.is_empty() {
+                        self.input.clear();
+                    }
+                    return Ok(());
                 }
-                return Ok(());
             }
             (KeyModifiers::CONTROL, KeyCode::Char('d')) => {
                 self.should_quit = true;
                 return Ok(());
             }
+            (KeyModifiers::CONTROL, KeyCode::Char('l')) => {
+                // Redraw - ratatui handles this on next frame, just reset scroll
+                self.auto_scroll = true;
+                self.scroll_offset = 0;
+                return Ok(());
+            }
+            (KeyModifiers::CONTROL, KeyCode::Char('r')) => {
+                // History search - activate if we have history
+                if !self.input.history.is_empty() && self.input_mode == InputMode::Normal {
+                    self.open_history_search();
+                }
+                return Ok(());
+            }
+            // Meta+P (Alt+P) - model picker
+            (KeyModifiers::ALT, KeyCode::Char('p')) => {
+                if self.input_mode == InputMode::Normal {
+                    self.open_model_picker();
+                }
+                return Ok(());
+            }
+            // Meta+T (Alt+T) - thinking toggle
+            (KeyModifiers::ALT, KeyCode::Char('t')) => {
+                if self.input_mode == InputMode::Normal {
+                    self.toggle_thinking();
+                }
+                return Ok(());
+            }
+            // Meta+O (Alt+O) - fast mode toggle
+            (KeyModifiers::ALT, KeyCode::Char('o')) => {
+                if self.input_mode == InputMode::Normal {
+                    self.toggle_fast_mode();
+                }
+                return Ok(());
+            }
             _ => {}
+        }
+
+        // Picker mode navigation
+        if self.input_mode == InputMode::Picker {
+            match (key.modifiers, key.code) {
+                (_, KeyCode::Esc) => {
+                    self.picker = None;
+                    self.input_mode = InputMode::Normal;
+                }
+                (_, KeyCode::Up) | (KeyModifiers::CONTROL, KeyCode::Char('p')) => {
+                    if let Some(ref mut p) = self.picker {
+                        p.move_up();
+                    }
+                }
+                (_, KeyCode::Down) | (KeyModifiers::CONTROL, KeyCode::Char('n')) => {
+                    if let Some(ref mut p) = self.picker {
+                        p.move_down();
+                    }
+                }
+                (_, KeyCode::Enter) => {
+                    self.handle_picker_select().await?;
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
+
+        // History search mode
+        if self.input_mode == InputMode::HistorySearch {
+            match (key.modifiers, key.code) {
+                (_, KeyCode::Esc) | (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
+                    self.input_mode = InputMode::Normal;
+                    self.input.clear();
+                }
+                (_, KeyCode::Enter) => {
+                    // Accept the current history match and submit
+                    self.input_mode = InputMode::Normal;
+                    let input = self.input.take_buffer();
+                    if !input.trim().is_empty() {
+                        self.submit_input(&input).await?;
+                    }
+                }
+                (_, KeyCode::Char(c)) => {
+                    self.input.insert_char(c);
+                    self.history_search_update();
+                }
+                (KeyModifiers::NONE, KeyCode::Backspace) => {
+                    self.input.backspace();
+                    self.history_search_update();
+                }
+                _ => {}
+            }
+            return Ok(());
         }
 
         // Permission prompt mode
@@ -169,7 +353,7 @@ impl App {
             return Ok(());
         }
 
-        // During streaming, only Ctrl+C is handled
+        // During streaming, only Ctrl+C is handled (already done above)
         if self.input_mode == InputMode::Streaming {
             return Ok(());
         }
@@ -177,6 +361,8 @@ impl App {
         // Normal input mode
         match (key.modifiers, key.code) {
             (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Enter) => {
+                self.ctrl_c_first = None;
+                self.esc_first = None;
                 let input = self.input.take_buffer();
                 if !input.trim().is_empty() {
                     self.submit_input(&input).await?;
@@ -186,7 +372,23 @@ impl App {
                 self.input.insert_char('\n');
             }
             (KeyModifiers::NONE, KeyCode::Esc) => {
-                self.input.clear();
+                // Double-press Esc: first clears completions/history, second clears input
+                let now = Instant::now();
+                if self.input.completion_matches.is_empty() && self.input.history_index.is_none() {
+                    if let Some(first) = self.esc_first {
+                        if now.duration_since(first).as_millis() < 1500 {
+                            self.input.clear();
+                            self.esc_first = None;
+                            return Ok(());
+                        }
+                    }
+                    self.esc_first = Some(now);
+                }
+                self.input.clear_completions();
+                self.input.history_index = None;
+                if self.input.buffer.is_empty() {
+                    self.input.clear();
+                }
             }
             (KeyModifiers::NONE, KeyCode::Tab) => {
                 if self.input.buffer.starts_with('/') {
@@ -215,7 +417,29 @@ impl App {
             (KeyModifiers::SHIFT, KeyCode::Tab) => {
                 self.cycle_permission_mode();
             }
+            // Ctrl+A - cursor to start
+            (KeyModifiers::CONTROL, KeyCode::Char('a')) => {
+                self.input.move_cursor_home();
+            }
+            // Ctrl+E - cursor to end
+            (KeyModifiers::CONTROL, KeyCode::Char('e')) => {
+                self.input.move_cursor_end();
+            }
+            // Ctrl+K - delete to end of line
+            (KeyModifiers::CONTROL, KeyCode::Char('k')) => {
+                self.input.delete_to_end();
+            }
+            // Ctrl+U - delete to start of line
+            (KeyModifiers::CONTROL, KeyCode::Char('u')) => {
+                self.input.delete_to_start();
+            }
+            // Ctrl+W - delete word backward
+            (KeyModifiers::CONTROL, KeyCode::Char('w')) => {
+                self.input.delete_word_backward();
+            }
             (_, KeyCode::Char(c)) => {
+                self.ctrl_c_first = None;
+                self.esc_first = None;
                 self.input.insert_char(c);
             }
             (KeyModifiers::NONE, KeyCode::Backspace) => {
@@ -230,12 +454,10 @@ impl App {
             (KeyModifiers::NONE, KeyCode::Right) => {
                 self.input.move_cursor_right();
             }
-            (KeyModifiers::NONE, KeyCode::Home)
-            | (KeyModifiers::CONTROL, KeyCode::Char('a')) => {
+            (KeyModifiers::NONE, KeyCode::Home) => {
                 self.input.move_cursor_home();
             }
-            (KeyModifiers::NONE, KeyCode::End)
-            | (KeyModifiers::CONTROL, KeyCode::Char('e')) => {
+            (KeyModifiers::NONE, KeyCode::End) => {
                 self.input.move_cursor_end();
             }
             _ => {}
@@ -302,6 +524,7 @@ impl App {
                 self.input_mode = InputMode::Normal;
                 self.spinner.active = false;
                 self.cost = self.engine.cost_tracker.lock().unwrap().format_cost();
+                self.update_context_pct();
                 self.save_session();
             }
             StreamEvent::Error(err) => {
@@ -382,6 +605,7 @@ impl App {
             frame: 0,
             message: "Thinking...".to_string(),
             active: true,
+            started_at: Some(Instant::now()),
         };
         self.auto_scroll = true;
         self.scroll_offset = 0;
@@ -394,6 +618,17 @@ impl App {
         self.tick_count += 1;
         if self.spinner.active {
             self.spinner.frame = self.tick_count as usize % SPINNER_FRAMES.len();
+        }
+        // Clear double-press timeouts
+        if let Some(first) = self.ctrl_c_first {
+            if first.elapsed().as_millis() > 1500 {
+                self.ctrl_c_first = None;
+            }
+        }
+        if let Some(first) = self.esc_first {
+            if first.elapsed().as_millis() > 1500 {
+                self.esc_first = None;
+            }
         }
     }
 
@@ -430,6 +665,7 @@ impl App {
             frame: 0,
             message: "Thinking...".to_string(),
             active: true,
+            started_at: Some(Instant::now()),
         };
         self.auto_scroll = true;
         self.scroll_offset = 0;
@@ -467,9 +703,7 @@ impl App {
                         text: format!("Model changed to: {}", model),
                     });
                 } else {
-                    self.messages.push(DisplayMessage::Status {
-                        text: format!("Current model: {}", self.engine.model),
-                    });
+                    self.open_model_picker();
                 }
                 return Ok(());
             }
@@ -486,31 +720,51 @@ impl App {
                 return Ok(());
             }
             "/help" => {
-                let help_text = "Available commands:\n\
-                    /help - Show this help\n\
-                    /clear - Clear conversation\n\
-                    /cost - Show token usage and cost\n\
-                    /model [name] - Show or change model\n\
-                    /status - Show session status\n\
-                    /compact - Compact conversation\n\
-                    /diff - Show git diff\n\
-                    /commit - Generate commit message\n\
-                    /review - Review code changes\n\
-                    /sessions - List saved sessions\n\
-                    /resume [id] - Resume session\n\
-                    /export [path] - Export conversation\n\
-                    /rewind [n] - Rewind n messages\n\
-                    /fast - Toggle fast mode\n\
-                    /permissions - Show permission mode\n\
-                    /quit - Exit";
-                self.messages.push(DisplayMessage::Status {
-                    text: help_text.to_string(),
-                });
+                self.open_help_picker();
                 return Ok(());
             }
             "/quit" | "/exit" | "/q" => {
                 self.should_quit = true;
                 return Ok(());
+            }
+            "/resume" | "/continue" => {
+                let parts: Vec<&str> = input.split_whitespace().collect();
+                if parts.get(1).is_some() {
+                    // Has argument - delegate to command handler
+                } else {
+                    // No argument - open session picker
+                    self.open_resume_picker().await;
+                    return Ok(());
+                }
+            }
+            "/theme" => {
+                let parts: Vec<&str> = input.split_whitespace().collect();
+                if parts.get(1).is_some() {
+                    // Has argument - delegate to command handler
+                } else {
+                    self.open_theme_picker();
+                    return Ok(());
+                }
+            }
+            "/permissions" | "/allowed-tools" => {
+                let parts: Vec<&str> = input.split_whitespace().collect();
+                if parts.get(1).is_some() {
+                    // Has argument - delegate to command handler
+                } else {
+                    self.open_permissions_picker();
+                    return Ok(());
+                }
+            }
+            "/fast" => {
+                self.toggle_fast_mode();
+                return Ok(());
+            }
+            "/effort" => {
+                let parts: Vec<&str> = input.split_whitespace().collect();
+                if parts.get(1).is_none() {
+                    self.open_effort_picker();
+                    return Ok(());
+                }
             }
             _ => {}
         }
@@ -538,6 +792,7 @@ impl App {
                     frame: 0,
                     message: "Thinking...".to_string(),
                     active: true,
+                    started_at: Some(Instant::now()),
                 };
             }
             crate::commands::CommandResult::ToggleVim => {
@@ -587,6 +842,356 @@ impl App {
         self.messages.push(DisplayMessage::Status {
             text: format!("Permission mode: {}", next),
         });
+    }
+
+    /// Open the model picker overlay.
+    fn open_model_picker(&mut self) {
+        let models = vec![
+            PickerItem { label: "claude-opus-4-20250514".into(), description: "Most capable, highest cost".into(), value: "claude-opus-4-20250514".into() },
+            PickerItem { label: "claude-sonnet-4-20250514".into(), description: "Balanced capability and cost".into(), value: "claude-sonnet-4-20250514".into() },
+            PickerItem { label: "claude-haiku-4-5-20251001".into(), description: "Fastest, lowest cost".into(), value: "claude-haiku-4-5-20251001".into() },
+        ];
+        // Pre-select current model
+        let current = &self.engine.model;
+        let mut picker = PickerState::new("Select Model".into(), models, PickerSource::Model);
+        if let Some(idx) = picker.items.iter().position(|i| &i.value == current) {
+            picker.selected = idx;
+            picker.scroll_offset = idx.saturating_sub(picker.visible_count / 2);
+        }
+        self.picker = Some(picker);
+        self.input_mode = InputMode::Picker;
+    }
+
+    /// Open the session resume picker.
+    async fn open_resume_picker(&mut self) {
+        match venus_utils::session::list_sessions().await {
+            Ok(sessions) if sessions.is_empty() => {
+                self.messages.push(DisplayMessage::Status {
+                    text: "No saved sessions.".to_string(),
+                });
+            }
+            Ok(sessions) => {
+                let items: Vec<PickerItem> = sessions.iter().map(|s| {
+                    let time = chrono::DateTime::from_timestamp(s.updated_at as i64, 0)
+                        .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
+                        .unwrap_or_else(|| "unknown".to_string());
+                    let name = s.name.as_deref().unwrap_or(&s.id[..8.min(s.id.len())]);
+                    PickerItem {
+                        label: name.to_string(),
+                        description: format!("{} msgs | {} | {}", s.message_count, s.model, time),
+                        value: s.id.clone(),
+                    }
+                }).collect();
+                let picker = PickerState::new("Resume Session".into(), items, PickerSource::Resume(sessions));
+                self.picker = Some(picker);
+                self.input_mode = InputMode::Picker;
+            }
+            Err(e) => {
+                self.messages.push(DisplayMessage::Error {
+                    text: format!("Failed to list sessions: {}", e),
+                });
+            }
+        }
+    }
+
+    /// Open the theme picker.
+    fn open_theme_picker(&mut self) {
+        let themes = vec![
+            PickerItem { label: "dark".into(), description: "Dark theme (default)".into(), value: "dark".into() },
+            PickerItem { label: "light".into(), description: "Light theme".into(), value: "light".into() },
+            PickerItem { label: "auto".into(), description: "Auto-detect from terminal".into(), value: "auto".into() },
+        ];
+        let current = &self.engine.theme;
+        let mut picker = PickerState::new("Select Theme".into(), themes, PickerSource::Theme);
+        if let Some(idx) = picker.items.iter().position(|i| &i.value == current) {
+            picker.selected = idx;
+        }
+        self.picker = Some(picker);
+        self.input_mode = InputMode::Picker;
+    }
+
+    /// Open the permissions mode picker.
+    fn open_permissions_picker(&mut self) {
+        let modes = vec![
+            PickerItem { label: "default".into(), description: "Ask for permission on risky operations".into(), value: "default".into() },
+            PickerItem { label: "auto".into(), description: "Auto-approve most operations".into(), value: "auto".into() },
+            PickerItem { label: "bypass".into(), description: "Skip all permission checks (dangerous)".into(), value: "bypass".into() },
+        ];
+        let current = self.engine.settings.permission_mode.as_deref().unwrap_or("default");
+        let mut picker = PickerState::new("Permission Mode".into(), modes, PickerSource::Permissions);
+        if let Some(idx) = picker.items.iter().position(|i| i.value == current) {
+            picker.selected = idx;
+        }
+        self.picker = Some(picker);
+        self.input_mode = InputMode::Picker;
+    }
+
+    /// Open the effort level picker.
+    fn open_effort_picker(&mut self) {
+        let current_effort = self.engine.settings.thinking.as_ref()
+            .and_then(|t| t.budget_tokens)
+            .map(|b| match b {
+                0..=1024 => "low",
+                1025..=4096 => "medium",
+                4097..=10000 => "high",
+                _ => "max",
+            })
+            .unwrap_or("medium");
+
+        let items = vec![
+            PickerItem { label: "low".into(), description: "Minimal thinking, fastest response".into(), value: "low".into() },
+            PickerItem { label: "medium".into(), description: "Balanced thinking".into(), value: "medium".into() },
+            PickerItem { label: "high".into(), description: "More thorough thinking".into(), value: "high".into() },
+            PickerItem { label: "max".into(), description: "Maximum thinking depth".into(), value: "max".into() },
+        ];
+        let mut picker = PickerState::new("Effort Level".into(), items, PickerSource::Effort);
+        if let Some(idx) = picker.items.iter().position(|i| i.value == current_effort) {
+            picker.selected = idx;
+        }
+        self.picker = Some(picker);
+        self.input_mode = InputMode::Picker;
+    }
+
+    /// Open the help picker overlay.
+    fn open_help_picker(&mut self) {
+        let items = vec![
+            PickerItem { label: "/help".into(), description: "Show this help".into(), value: "/help".into() },
+            PickerItem { label: "/clear".into(), description: "Clear conversation history".into(), value: "/clear".into() },
+            PickerItem { label: "/cost".into(), description: "Show token usage and cost".into(), value: "/cost".into() },
+            PickerItem { label: "/model".into(), description: "Show or change model (Alt+P)".into(), value: "/model".into() },
+            PickerItem { label: "/status".into(), description: "Show session status".into(), value: "/status".into() },
+            PickerItem { label: "/compact".into(), description: "Compact conversation with AI".into(), value: "/compact".into() },
+            PickerItem { label: "/diff".into(), description: "Show git diff".into(), value: "/diff".into() },
+            PickerItem { label: "/commit".into(), description: "Generate commit message".into(), value: "/commit".into() },
+            PickerItem { label: "/review".into(), description: "Review code changes".into(), value: "/review".into() },
+            PickerItem { label: "/sessions".into(), description: "List saved sessions".into(), value: "/sessions".into() },
+            PickerItem { label: "/resume".into(), description: "Resume a session".into(), value: "/resume".into() },
+            PickerItem { label: "/fast".into(), description: "Toggle fast mode (Alt+O)".into(), value: "/fast".into() },
+            PickerItem { label: "/permissions".into(), description: "Show permission mode (Shift+Tab)".into(), value: "/permissions".into() },
+            PickerItem { label: "/config".into(), description: "Show configuration".into(), value: "/config".into() },
+            PickerItem { label: "/theme".into(), description: "Set terminal theme".into(), value: "/theme".into() },
+            PickerItem { label: "/effort".into(), description: "Set effort level".into(), value: "/effort".into() },
+            PickerItem { label: "/quit".into(), description: "Exit Venus (Ctrl+D or Ctrl+C x2)".into(), value: "/quit".into() },
+            PickerItem { label: "─── Shortcuts ───".into(), description: "".into(), value: "".into() },
+            PickerItem { label: "Ctrl+L".into(), description: "Redraw screen".into(), value: "".into() },
+            PickerItem { label: "Ctrl+R".into(), description: "Search history".into(), value: "".into() },
+            PickerItem { label: "Ctrl+K".into(), description: "Delete to end of line".into(), value: "".into() },
+            PickerItem { label: "Ctrl+U".into(), description: "Delete to start of line".into(), value: "".into() },
+            PickerItem { label: "Ctrl+W".into(), description: "Delete word backward".into(), value: "".into() },
+            PickerItem { label: "Alt+P".into(), description: "Open model picker".into(), value: "".into() },
+            PickerItem { label: "Alt+T".into(), description: "Toggle thinking mode".into(), value: "".into() },
+            PickerItem { label: "Alt+O".into(), description: "Toggle fast mode".into(), value: "".into() },
+            PickerItem { label: "Shift+Tab".into(), description: "Cycle permission mode".into(), value: "".into() },
+        ];
+        let picker = PickerState::new("Commands & Shortcuts".into(), items, PickerSource::Help);
+        self.picker = Some(picker);
+        self.input_mode = InputMode::Picker;
+    }
+
+    /// Open history search mode.
+    fn open_history_search(&mut self) {
+        self.input.clear();
+        self.input_mode = InputMode::HistorySearch;
+    }
+
+    /// Update history search filter based on current input buffer.
+    fn history_search_update(&mut self) {
+        // History search filtering happens at display time - we just keep the buffer
+        // The matching entry is shown via the input display
+        let query = self.input.buffer.to_lowercase();
+        if query.is_empty() {
+            return;
+        }
+        // Find most recent history entry matching query
+        for entry in self.input.history.iter().rev() {
+            if entry.to_lowercase().contains(&query) {
+                // Replace buffer with matching entry for preview
+                // Keep the query in a separate field would be ideal, but for simplicity
+                // we'll just show the match in the input area
+                break;
+            }
+        }
+    }
+
+    /// Toggle thinking mode.
+    fn toggle_thinking(&mut self) {
+        use venus_utils::config::ThinkingConfig;
+        let current = self.engine.settings.thinking.as_ref()
+            .and_then(|t| t.mode.as_deref())
+            .unwrap_or("disabled");
+        let next = match current {
+            "disabled" => "enabled",
+            "enabled" => "adaptive",
+            _ => "disabled",
+        };
+        self.engine.settings = Arc::new({
+            let mut s = (*self.engine.settings).clone();
+            s.thinking = Some(ThinkingConfig {
+                mode: Some(next.to_string()),
+                budget_tokens: s.thinking.as_ref().and_then(|t| t.budget_tokens),
+            });
+            s
+        });
+        self.messages.push(DisplayMessage::Status {
+            text: format!("Thinking mode: {}", next),
+        });
+    }
+
+    /// Toggle fast mode (switch to/from haiku).
+    fn toggle_fast_mode(&mut self) {
+        let fast_model = "claude-haiku-4-5-20251001";
+        if self.engine.model == fast_model {
+            let original = self.engine.settings.effective_model().to_string();
+            self.engine.model = original.clone();
+            self.messages.push(DisplayMessage::Status {
+                text: format!("Fast mode OFF -> {}", original),
+            });
+        } else {
+            self.engine.model = fast_model.to_string();
+            self.messages.push(DisplayMessage::Status {
+                text: format!("Fast mode ON -> {}", fast_model),
+            });
+        }
+    }
+
+    /// Handle selection in the active picker.
+    async fn handle_picker_select(&mut self) -> Result<()> {
+        let picker = match self.picker.take() {
+            Some(p) => p,
+            None => return Ok(()),
+        };
+        let selected = match picker.selected_item() {
+            Some(item) if !item.value.is_empty() => item.clone(),
+            _ => {
+                // Separator or empty value - just close picker
+                self.input_mode = InputMode::Normal;
+                return Ok(());
+            }
+        };
+
+        match picker.source {
+            PickerSource::Model => {
+                self.engine.model = selected.value.clone();
+                self.messages.push(DisplayMessage::Status {
+                    text: format!("Model changed to: {}", selected.value),
+                });
+            }
+            PickerSource::Theme => {
+                self.engine.theme = selected.value.clone();
+                self.messages.push(DisplayMessage::Status {
+                    text: format!("Theme changed to: {}", selected.value),
+                });
+            }
+            PickerSource::Help => {
+                // Help picker just shows info, no action needed
+            }
+            PickerSource::Resume(sessions) => {
+                if let Some(session) = sessions.iter().find(|s| s.id == selected.value) {
+                    let session_id = session.id.clone();
+                    match venus_utils::session::load_session(&session_id).await {
+                        Ok((meta, msg_values)) => {
+                            let messages: Vec<venus_core::message::Message> = msg_values
+                                .iter()
+                                .filter_map(|v| serde_json::from_value(v.clone()).ok())
+                                .collect();
+                            let msg_count = messages.len();
+                            *self.engine.messages.lock().await = messages;
+                            self.engine.session_id = meta.id.clone();
+                            self.engine.created_at = meta.created_at;
+                            // Rebuild display messages from loaded conversation
+                            self.messages.clear();
+                            self.messages.push(DisplayMessage::Status {
+                                text: format!("Resumed session {} ({} messages)", &meta.id[..8.min(meta.id.len())], msg_count),
+                            });
+                        }
+                        Err(e) => {
+                            self.messages.push(DisplayMessage::Error {
+                                text: format!("Failed to load session: {}", e),
+                            });
+                        }
+                    }
+                }
+            }
+            PickerSource::Permissions => {
+                if ["default", "auto", "bypass"].contains(&selected.value.as_str()) {
+                    self.engine.settings = Arc::new({
+                        let mut s = (*self.engine.settings).clone();
+                        s.permission_mode = Some(selected.value.clone());
+                        s
+                    });
+                    self.messages.push(DisplayMessage::Status {
+                        text: format!("Permission mode: {}", selected.value),
+                    });
+                }
+            }
+            PickerSource::Effort => {
+                use venus_utils::config::ThinkingConfig;
+                let budget = match selected.value.as_str() {
+                    "low" => Some(1024),
+                    "medium" => Some(4096),
+                    "high" => Some(10000),
+                    "max" => Some(32000),
+                    _ => None,
+                };
+                self.engine.settings = Arc::new({
+                    let mut s = (*self.engine.settings).clone();
+                    let existing_mode = s.thinking.as_ref().and_then(|t| t.mode.clone());
+                    s.thinking = Some(ThinkingConfig {
+                        mode: existing_mode.or_else(|| Some("enabled".to_string())),
+                        budget_tokens: budget,
+                    });
+                    s
+                });
+                self.messages.push(DisplayMessage::Status {
+                    text: format!("Effort level: {}", selected.value),
+                });
+            }
+            PickerSource::Skills(_) => {
+                // Skills picker invokes the selected skill
+                return self.handle_slash_command(&format!("/{}", selected.value)).await;
+            }
+        }
+
+        self.input_mode = InputMode::Normal;
+        self.save_session();
+        self.cost = self.engine.cost_tracker.lock().unwrap().format_cost();
+        Ok(())
+    }
+
+    /// Update context window usage percentage.
+    fn update_context_pct(&mut self) {
+        // Use a blocking approach since we're in an async context
+        let engine = self.engine.clone();
+        let rt = tokio::runtime::Handle::current();
+        let result = std::thread::spawn(move || {
+            rt.block_on(async {
+                let messages = engine.messages.lock().await;
+                let analysis = venus_core::compact::analysis::analyze_context(
+                    &messages,
+                    &engine.system_prompt,
+                );
+                let window = venus_utils::context_window::context_window_for_model(&engine.model);
+                if window > 0 {
+                    (analysis.total_tokens as f64 / window as f64 * 100.0) as u64
+                } else {
+                    0
+                }
+            })
+        }).join().unwrap_or(0);
+        self.context_pct = result;
+    }
+
+    /// Get visible history entries matching the current search query.
+    pub fn history_search_matches(&self) -> Vec<&str> {
+        let query = self.input.buffer.to_lowercase();
+        if query.is_empty() {
+            return self.input.history.iter().rev().take(5).map(|s| s.as_str()).collect();
+        }
+        self.input.history.iter().rev()
+            .filter(|entry| entry.to_lowercase().contains(&query))
+            .take(5)
+            .map(|s| s.as_str())
+            .collect()
     }
 
     /// Save the current session to disk.
