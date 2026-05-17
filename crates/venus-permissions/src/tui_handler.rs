@@ -1,8 +1,7 @@
 use async_trait::async_trait;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use serde_json::Value;
-use std::io::Write;
 use std::sync::{Arc, Mutex};
+use tokio::sync::{mpsc, oneshot};
 use tracing::debug;
 use venus_core::tool::{PermissionDecision, PermissionHandler};
 use venus_utils::config::Settings;
@@ -15,23 +14,39 @@ use crate::types::PermissionMode;
 /// Read-only tools that are always auto-allowed.
 const READ_ONLY_TOOLS: &[&str] = &["Read", "Glob", "Grep"];
 
-/// Interactive permission handler that evaluates deny/allow rules,
-/// checks permission mode, and falls back to terminal prompting.
+/// A permission request sent from the engine to the TUI.
+pub struct PermissionRequest {
+    pub tool_name: String,
+    pub description: String,
+    pub response_tx: oneshot::Sender<PermissionResponse>,
+}
+
+/// The user's response to a permission request.
+pub enum PermissionResponse {
+    Allow,
+    Deny,
+    AlwaysAllow,
+    NeverAllow,
+}
+
+/// Channel-based permission handler for TUI mode.
 ///
-/// Session-level rules (from "always"/"never" choices) are stored with
-/// interior mutability so they can be updated during permission prompts.
-pub struct InteractivePermissionHandler {
+/// Instead of blocking on terminal I/O, this handler sends permission requests
+/// through a channel to the TUI event loop and awaits the response.
+pub struct TuiPermissionHandler {
     settings: Arc<Settings>,
     deny_rules: Vec<ParsedRule>,
     allow_rules: Vec<ParsedRule>,
-    /// Rules added at runtime via "always allow" (a) in permission prompts.
     session_allow_rules: Mutex<Vec<ParsedRule>>,
-    /// Rules added at runtime via "never" (d) in permission prompts.
     session_deny_rules: Mutex<Vec<ParsedRule>>,
+    request_tx: mpsc::UnboundedSender<PermissionRequest>,
 }
 
-impl InteractivePermissionHandler {
-    pub fn new(settings: Arc<Settings>) -> Self {
+impl TuiPermissionHandler {
+    pub fn new(
+        settings: Arc<Settings>,
+        request_tx: mpsc::UnboundedSender<PermissionRequest>,
+    ) -> Self {
         let deny_rules: Vec<ParsedRule> = settings
             .always_deny
             .as_ref()
@@ -44,7 +59,7 @@ impl InteractivePermissionHandler {
             .unwrap_or_default();
 
         debug!(
-            "permission handler: {} deny rules, {} allow rules",
+            "TUI permission handler: {} deny rules, {} allow rules",
             deny_rules.len(),
             allow_rules.len()
         );
@@ -55,14 +70,14 @@ impl InteractivePermissionHandler {
             allow_rules,
             session_allow_rules: Mutex::new(Vec::new()),
             session_deny_rules: Mutex::new(Vec::new()),
+            request_tx,
         }
     }
 
-    /// Add a session-level allow rule (from "always allow" prompt choice).
     fn add_session_allow_rule(&self, tool_name: &str) {
         let rule = ParsedRule {
             tool: tool_name.to_string(),
-            pattern: None, // matches all inputs for this tool
+            pattern: None,
         };
         if let Ok(mut rules) = self.session_allow_rules.lock() {
             debug!("adding session allow rule for tool: {}", tool_name);
@@ -70,7 +85,6 @@ impl InteractivePermissionHandler {
         }
     }
 
-    /// Add a session-level deny rule (from "never" prompt choice).
     fn add_session_deny_rule(&self, tool_name: &str) {
         let rule = ParsedRule {
             tool: tool_name.to_string(),
@@ -82,81 +96,43 @@ impl InteractivePermissionHandler {
         }
     }
 
-    /// Show the interactive permission prompt. Returns the user's decision.
-    /// For "always"/"never" choices, persists the rule to session storage.
-    fn prompt_user(&self, tool_name: &str, input: &Value) -> PermissionDecision {
+    /// Send a permission request to the TUI and await the response.
+    async fn prompt_user(&self, tool_name: &str, input: &Value) -> PermissionDecision {
         let description = format_tool_description(tool_name, input);
-        let stderr = std::io::stderr();
-        let mut out = stderr.lock();
+        let (response_tx, response_rx) = oneshot::channel();
 
-        // Draw a styled permission box matching Claude Code's amber/yellow theme
-        let _ = write!(out, "\r\n");
-        let _ = write!(
-            out,
-            "  \x1b[33m⏺\x1b[0m \x1b[1;33m{}\x1b[0m\r\n",
-            tool_name
-        );
-        let _ = write!(
-            out,
-            "  \x1b[2m{}\x1b[0m\r\n",
-            description
-        );
-        let _ = write!(out, "\r\n");
-        let _ = write!(
-            out,
-            "  \x1b[33my\x1b[0m allow  \
-             \x1b[33mn\x1b[0m deny  \
-             \x1b[33ma\x1b[0m always allow  \
-             \x1b[33md\x1b[0m never\r\n"
-        );
-        let _ = write!(out, "  \x1b[2m>\x1b[0m ");
-        let _ = out.flush();
+        let request = PermissionRequest {
+            tool_name: tool_name.to_string(),
+            description,
+            response_tx,
+        };
 
-        // Drop the lock before entering the blocking key-read loop
-        drop(out);
+        if self.request_tx.send(request).is_err() {
+            debug!("permission request channel closed, denying");
+            return PermissionDecision::Deny("channel closed".to_string());
+        }
 
-        loop {
-            if let Ok(Event::Key(KeyEvent { code, modifiers, .. })) = event::read() {
-                let stderr = std::io::stderr();
-                let mut out = stderr.lock();
-                match code {
-                    KeyCode::Char('y') | KeyCode::Char('Y') => {
-                        let _ = write!(out, "\r\n");
-                        return PermissionDecision::Allow;
-                    }
-                    KeyCode::Char('n') | KeyCode::Char('N') => {
-                        let _ = write!(out, "\r\n");
-                        return PermissionDecision::Deny("user denied".to_string());
-                    }
-                    KeyCode::Char('a') | KeyCode::Char('A') => {
-                        let _ = write!(out, "always\r\n");
-                        drop(out);
-                        self.add_session_allow_rule(tool_name);
-                        return PermissionDecision::Allow;
-                    }
-                    KeyCode::Char('d') | KeyCode::Char('D') => {
-                        let _ = write!(out, "never\r\n");
-                        drop(out);
-                        self.add_session_deny_rule(tool_name);
-                        return PermissionDecision::Deny("user denied permanently".to_string());
-                    }
-                    KeyCode::Esc => {
-                        let _ = write!(out, "\r\n");
-                        return PermissionDecision::Deny("user cancelled".to_string());
-                    }
-                    KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
-                        let _ = write!(out, "\r\n");
-                        return PermissionDecision::Deny("user cancelled".to_string());
-                    }
-                    _ => continue,
-                }
+        // Wait for the TUI to send back the user's decision
+        match response_rx.await {
+            Ok(PermissionResponse::Allow) => PermissionDecision::Allow,
+            Ok(PermissionResponse::Deny) => {
+                PermissionDecision::Deny("user denied".to_string())
             }
+            Ok(PermissionResponse::AlwaysAllow) => {
+                self.add_session_allow_rule(tool_name);
+                PermissionDecision::Allow
+            }
+            Ok(PermissionResponse::NeverAllow) => {
+                self.add_session_deny_rule(tool_name);
+                PermissionDecision::Deny("user denied permanently".to_string())
+            }
+            Err(_) => PermissionDecision::Deny("channel closed".to_string()),
         }
     }
 }
 
 #[async_trait]
-impl PermissionHandler for InteractivePermissionHandler {
+impl PermissionHandler for TuiPermissionHandler {
     async fn check_permission(&self, tool_name: &str, input: &Value) -> PermissionDecision {
         // 1. Config deny rules — highest priority
         for rule in &self.deny_rules {
@@ -171,7 +147,7 @@ impl PermissionHandler for InteractivePermissionHandler {
             }
         }
 
-        // 2. Session deny rules (from "never" choices)
+        // 2. Session deny rules
         if let Ok(rules) = self.session_deny_rules.lock() {
             for rule in rules.iter() {
                 if rule_matcher::rule_matches(rule, tool_name, input) {
@@ -184,7 +160,7 @@ impl PermissionHandler for InteractivePermissionHandler {
         // 3. Dangerous pattern check — always require approval
         if dangerous::is_dangerous(tool_name, input) {
             debug!("dangerous pattern detected for {}, prompting user", tool_name);
-            return self.prompt_user(tool_name, input);
+            return self.prompt_user(tool_name, input).await;
         }
 
         // 4. Read-only tools — auto-allow
@@ -204,7 +180,7 @@ impl PermissionHandler for InteractivePermissionHandler {
             }
         }
 
-        // 6. Session allow rules (from "always allow" choices)
+        // 6. Session allow rules
         if let Ok(rules) = self.session_allow_rules.lock() {
             for rule in rules.iter() {
                 if rule_matcher::rule_matches(rule, tool_name, input) {
@@ -214,8 +190,9 @@ impl PermissionHandler for InteractivePermissionHandler {
             }
         }
 
-        // 7. Permission mode (read dynamically to support runtime mode cycling)
-        let mode = self.settings
+        // 7. Permission mode
+        let mode = self
+            .settings
             .permission_mode
             .as_deref()
             .map(PermissionMode::from_str)
@@ -226,7 +203,7 @@ impl PermissionHandler for InteractivePermissionHandler {
                 PermissionDecision::Allow
             }
             PermissionMode::Default | PermissionMode::Plan | PermissionMode::Auto => {
-                self.prompt_user(tool_name, input)
+                self.prompt_user(tool_name, input).await
             }
         }
     }

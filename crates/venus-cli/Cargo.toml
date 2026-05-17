@@ -16,6 +16,7 @@ venus-tools = { path = "../venus-tools" }
 venus-mcp = { path = "../venus-mcp" }
 clap.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
 ratatui.workspace = true
 crossterm.workspace = true
 anyhow.workspace = true

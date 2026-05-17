@@ -1,8 +1,11 @@
+mod app;
 mod commands;
-mod input;
-mod markdown;
+mod event;
+mod input_state;
+mod markdown_tui;
 mod render;
-mod repl;
+mod tui;
+mod ui;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -31,6 +34,7 @@ use venus_core::skill::SkillRegistry;
 use venus_core::task::TaskStore;
 use venus_core::tool_registry::ToolRegistry;
 use venus_permissions::interactive::InteractivePermissionHandler;
+use venus_permissions::tui_handler::TuiPermissionHandler;
 use venus_utils::config::Settings;
 use render::OutputFormat;
 
@@ -231,7 +235,6 @@ async fn main() -> Result<()> {
     }
 
     let settings = Arc::new(settings);
-    let permissions = Arc::new(InteractivePermissionHandler::new(settings.clone()));
 
     // Load skills from ~/.claude/skills/ and <project>/.claude/skills/
     let skill_dirs = vec![
@@ -307,6 +310,21 @@ async fn main() -> Result<()> {
         String::new(),
         working_dir.clone(),
     ));
+
+    // Create permission handler based on mode
+    let is_interactive = cli.prompt.is_none();
+    let (perm_tx, perm_rx) = if is_interactive {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<venus_permissions::tui_handler::PermissionRequest>();
+        (Some(tx), Some(rx))
+    } else {
+        (None, None)
+    };
+
+    let permissions: Arc<dyn venus_core::tool::PermissionHandler> = if let Some(tx) = perm_tx {
+        Arc::new(TuiPermissionHandler::new(settings.clone(), tx))
+    } else {
+        Arc::new(InteractivePermissionHandler::new(settings.clone()))
+    };
 
     let mut engine =
         QueryEngine::new(settings.clone(), tools, permissions, working_dir.clone(), task_store, background_runtime, hook_runner).await?;
@@ -409,17 +427,176 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Print banner
-    render::print_banner(&engine);
-
     // Non-interactive mode
     if let Some(prompt) = cli.prompt {
-        repl::run_single_prompt(&engine, &prompt, &cli.output_format).await?;
+        let content = vec![venus_core::message::ContentBlock::text(&prompt)];
+        let mut rx = engine.submit_message(content).await?;
+
+        // Drain stream events
+        while let Some(event) = rx.recv().await {
+            match event {
+                venus_core::stream::StreamEvent::TextDelta(text) => {
+                    eprint!("{}", text);
+                }
+                venus_core::stream::StreamEvent::Error(err) => {
+                    eprintln!("\nError: {}", err);
+                }
+                venus_core::stream::StreamEvent::Usage(usage) => {
+                    let total = usage.input_tokens + usage.cache_read_tokens + usage.output_tokens;
+                    eprintln!("\n\ntokens: {} (in:{} out:{})", total, usage.input_tokens + usage.cache_read_tokens, usage.output_tokens);
+                }
+                venus_core::stream::StreamEvent::MessageComplete(_) => {
+                    eprintln!();
+                }
+                _ => {}
+            }
+        }
         return Ok(());
     }
 
-    // Interactive REPL
-    repl::run_repl(&mut engine, Some(skill_registry), cli.output_format, Some(plugin_registry)).await
+    // Interactive TUI mode
+    tui::install_panic_hook();
+
+    let mut terminal = tui::init().map_err(|e| anyhow::anyhow!("Failed to init terminal: {}", e))?;
+
+    let result = run_tui(&mut terminal, engine, Some(skill_registry), Some(plugin_registry), perm_rx).await;
+
+    // Restore terminal
+    let _ = tui::restore(&mut terminal);
+
+    result
+}
+
+async fn run_tui(
+    terminal: &mut tui::TuiTerminal,
+    engine: QueryEngine,
+    skill_registry: Option<Arc<venus_core::skill::SkillRegistry>>,
+    plugin_registry: Option<venus_core::plugin_registry::PluginRegistry>,
+    perm_rx: Option<tokio::sync::mpsc::UnboundedReceiver<venus_permissions::tui_handler::PermissionRequest>>,
+) -> Result<()> {
+    // Create the event channel
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+
+    // Spawn the crossterm event poller (keyboard, mouse, resize)
+    let crossterm_rx = event::spawn_event_poller();
+    {
+        let event_tx = event_tx.clone();
+        tokio::spawn(async move {
+            let mut crossterm_rx = crossterm_rx;
+            while let Some(evt) = crossterm_rx.recv().await {
+                if event_tx.send(evt).is_err() {
+                    break;
+                }
+            }
+        });
+    }
+
+    // Create the app with the event sender
+    let mut app = app::App::new(engine.clone(), skill_registry, plugin_registry, event_tx.clone());
+
+    // Set up cron scheduler
+    let (cron_tx, mut cron_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let scheduler = std::sync::Arc::new(venus_core::cron::CronScheduler::new(
+        cron_tx,
+        Some(app.engine.working_dir.clone()),
+    ));
+    scheduler.start();
+    app.engine.cron_scheduler = Some(scheduler);
+
+    // Forward cron prompts into the event channel
+    {
+        let event_tx = event_tx.clone();
+        tokio::spawn(async move {
+            while let Some(prompt) = cron_rx.recv().await {
+                if event_tx.send(event::AppEvent::CronPrompt(prompt)).is_err() {
+                    break;
+                }
+            }
+        });
+    }
+
+    // If we have a permission receiver, handle permission requests
+    let mut perm_rx = perm_rx;
+
+    // Fire SessionStart hook
+    engine
+        .hook_runner
+        .run_simple_event(venus_core::hooks::events::HookEvent::SessionStart {
+            session_id: app.engine.session_id.clone(),
+            cwd: app.engine.working_dir.display().to_string(),
+            model: app.engine.model.clone(),
+        })
+        .await;
+
+    // Main event loop
+    loop {
+        // Render UI
+        terminal.draw(|frame| ui::render(frame, &app))?;
+
+        // Show/hide cursor based on input mode
+        if app.input_mode == app::InputMode::Normal {
+            terminal.show_cursor()?;
+        } else {
+            terminal.hide_cursor()?;
+        }
+
+        // Build a select over all event sources
+        let evt = tokio::select! {
+            // Main event channel (keyboard, tick, stream, cron)
+            evt = event_rx.recv() => {
+                match evt {
+                    Some(e) => e,
+                    None => break,
+                }
+            }
+            // Permission requests from the engine
+            Some(perm_req) = async {
+                match perm_rx.as_mut() {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                // Handle permission request in the TUI
+                app.handle_permission_request(perm_req);
+                continue;
+            }
+        };
+
+        match evt {
+            event::AppEvent::Key(key) => {
+                app.handle_key(key).await?;
+            }
+            event::AppEvent::Mouse(mouse) => {
+                app.handle_mouse(mouse);
+            }
+            event::AppEvent::Resize(_, _) => {
+                // ratatui handles resize automatically
+            }
+            event::AppEvent::Tick => {
+                app.tick();
+            }
+            event::AppEvent::Stream(stream_event) => {
+                app.handle_stream_event(stream_event);
+            }
+            event::AppEvent::CronPrompt(prompt) => {
+                app.handle_cron_prompt(&prompt).await?;
+            }
+        }
+
+        if app.should_quit {
+            break;
+        }
+    }
+
+    // Fire Stop hook
+    app.engine
+        .hook_runner
+        .run_simple_event(venus_core::hooks::events::HookEvent::Stop {
+            session_id: app.engine.session_id.clone(),
+        })
+        .await;
+
+    Ok(())
 }
 
 async fn try_resume_by_prefix(

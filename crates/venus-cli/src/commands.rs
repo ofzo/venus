@@ -60,7 +60,10 @@ pub async fn handle_command(
             CommandResult::Continue
         }
         "/cost" => {
-            render::print_cost(engine);
+            let tracker = engine.cost_tracker.lock().unwrap();
+            let cost = tracker.format_cost();
+            let tokens = tracker.format_tokens();
+            eprintlf!("  Cost: {} | Tokens: {}", cost, tokens);
             CommandResult::Continue
         }
         "/model" => {

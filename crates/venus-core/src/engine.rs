@@ -455,10 +455,25 @@ impl QueryEngine {
         let mut stop_reason: Option<String> = None;
         let mut total_usage = TokenUsage::default();
 
-        while let Some(chunk_result) = pinned.next().await {
+        loop {
+            // Check for cancellation before each chunk
+            if self.cancel_token.is_cancelled() {
+                debug!("stream cancelled by user");
+                break;
+            }
+
+            // Race between the next chunk and cancellation
+            let chunk_result = tokio::select! {
+                chunk = pinned.next() => chunk,
+                _ = self.cancel_token.cancelled() => {
+                    debug!("stream cancelled during await");
+                    break;
+                }
+            };
+
             let chunk = match chunk_result {
-                Ok(c) => c,
-                Err(e) => {
+                Some(Ok(c)) => c,
+                Some(Err(e)) => {
                     // Build checkpoint from current state
                     let checkpoint_blocks: Vec<ContentBlock> =
                         blocks.iter().filter_map(|b| b.to_content_block()).collect();
@@ -477,6 +492,7 @@ impl QueryEngine {
                     }
                     .into());
                 }
+                None => break, // Stream ended normally
             };
             parser.buffer.push_str(&String::from_utf8_lossy(&chunk));
 
