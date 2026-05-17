@@ -148,13 +148,14 @@ impl SpinnerState {
     }
 
     /// Get the display message with verb and elapsed time (after 30s).
+    /// Uses ellipsis character U+2026 matching Claude Code's SpinnerWithVerb.
     pub fn display_message(&self) -> String {
         let verb = SPINNER_VERBS[self.verb_index % SPINNER_VERBS.len()];
         let elapsed = self.elapsed_secs();
         if elapsed >= 30 {
-            format!("{}... ({}s)", verb, elapsed)
+            format!("{}\u{2026} ({}s)", verb, elapsed) // … (U+2026)
         } else {
-            format!("{}...", verb)
+            format!("{}\u{2026}", verb) // … (U+2026)
         }
     }
 }

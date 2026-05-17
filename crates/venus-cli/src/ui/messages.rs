@@ -13,10 +13,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     for msg in &app.messages {
         match msg {
             DisplayMessage::User { text } => {
-                lines.push(Line::from(vec![
-                    Span::styled("> ", Style::default().fg(Color::Cyan)),
-                    Span::styled(text.clone(), Style::default().add_modifier(Modifier::BOLD)),
-                ]));
+                // Claude Code: no prefix on user messages, just the text
+                lines.push(Line::from(Span::styled(
+                    text.clone(),
+                    Style::default().add_modifier(Modifier::BOLD),
+                )));
                 lines.push(Line::from(""));
             }
             DisplayMessage::Assistant { segments } => {
@@ -37,8 +38,9 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                 is_error,
                 summary,
             } => {
+                // Claude Code uses ⏺ (U+23FA) for tool calls
                 let mut header = vec![
-                    Span::styled("  ⏺ ", Style::default().fg(Color::Cyan)),
+                    Span::styled("  \u{23FA} ", Style::default().fg(Color::Cyan)),
                     Span::styled(
                         name.clone(),
                         Style::default()
@@ -57,7 +59,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                 if !summary.is_empty() {
                     let color = if *is_error { Color::Red } else { Color::Green };
                     lines.push(Line::from(vec![
-                        Span::styled("  ⏺ ", Style::default().fg(color)),
+                        Span::styled("  \u{23FA} ", Style::default().fg(color)),
                         Span::styled(summary.clone(), Style::default().fg(Color::DarkGray)),
                     ]));
                 }
