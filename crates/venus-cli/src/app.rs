@@ -296,6 +296,13 @@ impl App {
                 }
                 return Ok(());
             }
+            // Ctrl+G - open external editor
+            (KeyModifiers::CONTROL, KeyCode::Char('g')) => {
+                if self.input_mode == InputMode::Normal {
+                    self.open_external_editor().await;
+                }
+                return Ok(());
+            }
             _ => {}
         }
 
@@ -796,6 +803,10 @@ impl App {
                     return Ok(());
                 }
             }
+            "/skills" => {
+                self.open_skills_picker();
+                return Ok(());
+            }
             _ => {}
         }
 
@@ -978,6 +989,32 @@ impl App {
         if let Some(idx) = picker.items.iter().position(|i| i.value == current_effort) {
             picker.selected = idx;
         }
+        self.picker = Some(picker);
+        self.input_mode = InputMode::Picker;
+    }
+
+    /// Open the skills picker.
+    fn open_skills_picker(&mut self) {
+        let skills = self.skill_registry.as_ref()
+            .map(|r| r.all())
+            .unwrap_or_default();
+
+        if skills.is_empty() {
+            self.messages.push(DisplayMessage::Status {
+                text: "No skills loaded.".to_string(),
+            });
+            return;
+        }
+
+        let items: Vec<PickerItem> = skills.iter().map(|s| {
+            PickerItem {
+                label: format!("/{}", s.name),
+                description: s.description.clone(),
+                value: s.name.clone(),
+            }
+        }).collect();
+
+        let picker = PickerState::new("Skills".into(), items, PickerSource::Skills(Vec::new()));
         self.picker = Some(picker);
         self.input_mode = InputMode::Picker;
     }
@@ -1209,6 +1246,81 @@ impl App {
             })
         }).join().unwrap_or(0);
         self.context_pct = result;
+    }
+
+    /// Open external editor for multi-line input.
+    async fn open_external_editor(&mut self) {
+        let editor = std::env::var("EDITOR")
+            .or_else(|_| std::env::var("VISUAL"))
+            .unwrap_or_else(|_| "vi".to_string());
+
+        // Create temp file with current buffer content
+        let temp_path = std::env::temp_dir().join("venus_input.md");
+        let initial_content = if self.input.buffer.is_empty() {
+            String::new()
+        } else {
+            self.input.buffer.clone()
+        };
+        if let Err(e) = std::fs::write(&temp_path, &initial_content) {
+            self.messages.push(DisplayMessage::Error {
+                text: format!("Failed to create temp file: {}", e),
+            });
+            return;
+        }
+
+        // Restore terminal before opening editor
+        // We need to temporarily leave raw mode
+        let _ = crossterm::terminal::disable_raw_mode();
+        let _ = crossterm::execute!(
+            std::io::stderr(),
+            crossterm::terminal::LeaveAlternateScreen,
+            crossterm::event::DisableMouseCapture
+        );
+
+        // Run editor
+        let status = std::process::Command::new(&editor)
+            .arg(&temp_path)
+            .status();
+
+        // Re-enter TUI mode
+        let _ = crossterm::terminal::enable_raw_mode();
+        let _ = crossterm::execute!(
+            std::io::stderr(),
+            crossterm::terminal::EnterAlternateScreen,
+            crossterm::event::EnableMouseCapture
+        );
+
+        match status {
+            Ok(s) if s.success() => {
+                match std::fs::read_to_string(&temp_path) {
+                    Ok(content) => {
+                        let trimmed = content.trim().to_string();
+                        if !trimmed.is_empty() {
+                            self.input.buffer = trimmed;
+                            self.input.cursor_pos = self.input.buffer.len();
+                        }
+                    }
+                    Err(e) => {
+                        self.messages.push(DisplayMessage::Error {
+                            text: format!("Failed to read editor output: {}", e),
+                        });
+                    }
+                }
+            }
+            Ok(s) => {
+                self.messages.push(DisplayMessage::Status {
+                    text: format!("Editor exited with status: {}", s),
+                });
+            }
+            Err(e) => {
+                self.messages.push(DisplayMessage::Error {
+                    text: format!("Failed to launch editor '{}': {}", editor, e),
+                });
+            }
+        }
+
+        // Clean up temp file
+        let _ = std::fs::remove_file(&temp_path);
     }
 
     /// Get visible history entries matching the current search query.
