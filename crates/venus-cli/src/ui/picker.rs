@@ -120,6 +120,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     // 4. Select options (compact layout with two-column)
     // Check if we should use two-column layout (when descriptions exist)
     let has_descriptions = picker.items.iter().any(|i| !i.description.is_empty() && !i.value.is_empty());
+    let is_config = matches!(picker.source, PickerSource::Config);
 
     for (vis_idx, item_idx) in (picker.scroll_offset..picker.scroll_offset + picker.visible_count).enumerate() {
         if item_idx >= picker.items.len() { break; }
@@ -143,26 +144,18 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 
         let mut spans = Vec::new();
 
-        if has_descriptions && !item.description.is_empty() {
-            // Two-column layout (matching TwoColumnRow exactly)
+        if is_config && !item.description.is_empty() {
+            // Config two-column layout: fixed width=44 left column
+            // {pointer_or_space} {label}  {value}
+            let left_width: usize = 30;
+
             // Indicator
             if is_focused {
                 spans.push(Span::styled(POINTER, Style::default().fg(Color::Cyan)));
-            } else if vis_idx == 0 && picker.scroll_offset > 0 {
-                spans.push(Span::styled(ARROW_DOWN, Style::default().fg(Color::DarkGray)));
-            } else if vis_idx == picker.visible_count - 1 && item_idx + 1 < picker.items.len() {
-                spans.push(Span::styled(ARROW_UP, Style::default().fg(Color::DarkGray)));
             } else {
                 spans.push(Span::raw(" "));
             }
-
-            // Space
             spans.push(Span::raw(" "));
-
-            // Index prefix (dimColor) + Label (colored)
-            let index_str = format!("{:>width$}.", item_idx + 1, width = max_index_width);
-            let padded = format!("{:<width$}", index_str, width = index_pad);
-            spans.push(Span::styled(padded, Style::default().fg(Color::DarkGray)));
 
             // Label
             let label_style = if is_focused {
@@ -172,23 +165,20 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             };
             spans.push(Span::styled(item.label.clone(), label_style));
 
-            // Padding to align descriptions
-            let used_width: usize = 1 + 1 + index_pad + item.label.chars().count();
-            let label_col_width: usize = 30;
-            let padding = label_col_width.saturating_sub(used_width);
+            // Padding to align values
+            let used = 2 + item.label.chars().count(); // indicator + space + label
+            let padding = left_width.saturating_sub(used);
             if padding > 0 {
                 spans.push(Span::raw(" ".repeat(padding)));
             }
 
-            // Description (marginLeft=2, dimColor)
-            spans.push(Span::raw("  "));
+            // Value (dimColor for config)
             spans.push(Span::styled(
                 item.description.clone(),
                 Style::default().fg(Color::DarkGray),
             ));
-        } else {
-            // Compact layout (no descriptions or inline)
-            // The index is INSIDE the Text with dimColor, label follows
+        } else if has_descriptions && !item.description.is_empty() {
+            // Two-column layout (matching TwoColumnRow exactly)
             if is_focused {
                 spans.push(Span::styled(POINTER, Style::default().fg(Color::Cyan)));
             } else if vis_idx == 0 && picker.scroll_offset > 0 {
@@ -198,16 +188,51 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             } else {
                 spans.push(Span::raw(" "));
             }
-
-            // Space
             spans.push(Span::raw(" "));
 
-            // Index prefix (dimColor)
+            // Index + Label
             let index_str = format!("{:>width$}.", item_idx + 1, width = max_index_width);
             let padded = format!("{:<width$}", index_str, width = index_pad);
             spans.push(Span::styled(padded, Style::default().fg(Color::DarkGray)));
 
-            // Label (colored)
+            let label_style = if is_focused {
+                Style::default().fg(Color::Cyan)
+            } else {
+                Style::default()
+            };
+            spans.push(Span::styled(item.label.clone(), label_style));
+
+            // Padding
+            let used_width: usize = 1 + 1 + index_pad + item.label.chars().count();
+            let label_col_width: usize = 30;
+            let padding = label_col_width.saturating_sub(used_width);
+            if padding > 0 {
+                spans.push(Span::raw(" ".repeat(padding)));
+            }
+
+            // Description
+            spans.push(Span::raw("  "));
+            spans.push(Span::styled(
+                item.description.clone(),
+                Style::default().fg(Color::DarkGray),
+            ));
+        } else {
+            // Compact layout (no descriptions)
+            if is_focused {
+                spans.push(Span::styled(POINTER, Style::default().fg(Color::Cyan)));
+            } else if vis_idx == 0 && picker.scroll_offset > 0 {
+                spans.push(Span::styled(ARROW_DOWN, Style::default().fg(Color::DarkGray)));
+            } else if vis_idx == picker.visible_count - 1 && item_idx + 1 < picker.items.len() {
+                spans.push(Span::styled(ARROW_UP, Style::default().fg(Color::DarkGray)));
+            } else {
+                spans.push(Span::raw(" "));
+            }
+            spans.push(Span::raw(" "));
+
+            let index_str = format!("{:>width$}.", item_idx + 1, width = max_index_width);
+            let padded = format!("{:<width$}", index_str, width = index_pad);
+            spans.push(Span::styled(padded, Style::default().fg(Color::DarkGray)));
+
             let label_style = if is_focused {
                 Style::default().fg(Color::Cyan)
             } else {
