@@ -334,6 +334,21 @@ impl App {
                         p.move_down();
                     }
                 }
+                // Left/Right arrows - adjust effort in model picker
+                (_, KeyCode::Left) => {
+                    if let Some(ref p) = self.picker {
+                        if matches!(p.source, PickerSource::Model) {
+                            self.cycle_effort(-1);
+                        }
+                    }
+                }
+                (_, KeyCode::Right) => {
+                    if let Some(ref p) = self.picker {
+                        if matches!(p.source, PickerSource::Model) {
+                            self.cycle_effort(1);
+                        }
+                    }
+                }
                 (_, KeyCode::Enter) => {
                     self.handle_picker_select().await?;
                 }
@@ -908,20 +923,92 @@ impl App {
 
     /// Open the model picker overlay.
     fn open_model_picker(&mut self) {
+        let current_effort = self.get_effort_label();
         let models = vec![
-            PickerItem { label: "claude-opus-4-20250514".into(), description: "Most capable, highest cost".into(), value: "claude-opus-4-20250514".into() },
-            PickerItem { label: "claude-sonnet-4-20250514".into(), description: "Balanced capability and cost".into(), value: "claude-sonnet-4-20250514".into() },
-            PickerItem { label: "claude-haiku-4-5-20251001".into(), description: "Fastest, lowest cost".into(), value: "claude-haiku-4-5-20251001".into() },
+            PickerItem {
+                label: "claude-opus-4-20250514".into(),
+                description: format!("Most capable | effort: {}", current_effort),
+                value: "claude-opus-4-20250514".into(),
+            },
+            PickerItem {
+                label: "claude-sonnet-4-20250514".into(),
+                description: format!("Balanced | effort: {}", current_effort),
+                value: "claude-sonnet-4-20250514".into(),
+            },
+            PickerItem {
+                label: "claude-haiku-4-5-20251001".into(),
+                description: format!("Fastest | effort: {}", current_effort),
+                value: "claude-haiku-4-5-20251001".into(),
+            },
         ];
-        // Pre-select current model
         let current = &self.engine.model;
-        let mut picker = PickerState::new("Select Model".into(), models, PickerSource::Model);
+        let mut picker = PickerState::new("Select Model (←→ adjust effort)".into(), models, PickerSource::Model);
         if let Some(idx) = picker.items.iter().position(|i| &i.value == current) {
             picker.selected = idx;
             picker.scroll_offset = idx.saturating_sub(picker.visible_count / 2);
         }
         self.picker = Some(picker);
         self.input_mode = InputMode::Picker;
+    }
+
+    /// Get current effort level label.
+    fn get_effort_label(&self) -> &str {
+        match self.engine.settings.thinking.as_ref().and_then(|t| t.budget_tokens) {
+            Some(0..=1024) => "low",
+            Some(1025..=4096) => "medium",
+            Some(4097..=10000) => "high",
+            Some(_) => "max",
+            None => "medium",
+        }
+    }
+
+    /// Cycle effort level in the model picker.
+    fn cycle_effort(&mut self, direction: i32) {
+        let current_budget = self.engine.settings.thinking.as_ref().and_then(|t| t.budget_tokens);
+        let current_label = match current_budget {
+            Some(0..=1024) => "low",
+            Some(1025..=4096) => "medium",
+            Some(4097..=10000) => "high",
+            Some(_) => "max",
+            None => "medium",
+        };
+        let next = match (current_label, direction) {
+            ("low", 1) => "medium",
+            ("medium", 1) => "high",
+            ("high", 1) => "max",
+            ("max", 1) => "low",
+            ("low", -1) => "max",
+            ("medium", -1) => "low",
+            ("high", -1) => "medium",
+            ("max", -1) => "high",
+            _ => current_label,
+        };
+        use venus_utils::config::ThinkingConfig;
+        let budget = match next {
+            "low" => Some(1024),
+            "medium" => Some(4096),
+            "high" => Some(10000),
+            "max" => Some(32000),
+            _ => None,
+        };
+        let existing_mode = self.engine.settings.thinking.as_ref().and_then(|t| t.mode.clone());
+        self.engine.settings = Arc::new({
+            let mut s = (*self.engine.settings).clone();
+            s.thinking = Some(ThinkingConfig {
+                mode: existing_mode.or_else(|| Some("enabled".to_string())),
+                budget_tokens: budget,
+            });
+            s
+        });
+        // Update picker descriptions
+        if let Some(ref mut picker) = self.picker {
+            if matches!(picker.source, PickerSource::Model) {
+                for item in &mut picker.items {
+                    let base = item.description.split(" | effort:").next().unwrap_or("");
+                    item.description = format!("{} | effort: {}", base, next);
+                }
+            }
+        }
     }
 
     /// Open the session resume picker.
