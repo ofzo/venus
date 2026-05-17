@@ -462,6 +462,16 @@ impl App {
                     self.auto_scroll = true;
                 }
             }
+            // Ctrl+Home - scroll to top
+            (KeyModifiers::CONTROL, KeyCode::Home) => {
+                self.auto_scroll = false;
+                self.scroll_offset = u16::MAX;
+            }
+            // Ctrl+End - scroll to bottom
+            (KeyModifiers::CONTROL, KeyCode::End) => {
+                self.auto_scroll = true;
+                self.scroll_offset = 0;
+            }
             (KeyModifiers::SHIFT, KeyCode::Tab) => {
                 self.cycle_permission_mode();
             }
