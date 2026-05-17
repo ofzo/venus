@@ -461,6 +461,11 @@ impl App {
                     if !self.input.completion_matches.is_empty() {
                         self.input.accept_completion();
                     }
+                } else if self.input.file_completion_active {
+                    self.input.complete_file_path(&self.engine.working_dir);
+                    if !self.input.file_completions.is_empty() {
+                        self.input.accept_file_completion();
+                    }
                 }
             }
             (KeyModifiers::NONE, KeyCode::Up) => {

@@ -9,6 +9,10 @@ pub struct InputState {
     pub completion_index: usize,
     /// Ghost text shown inline after cursor (dimmed preview of completion).
     pub ghost_text: Option<String>,
+    /// Whether we're in file completion mode (after typing @).
+    pub file_completion_active: bool,
+    /// File completion matches.
+    pub file_completions: Vec<String>,
 }
 
 const SLASH_COMMANDS: &[&str] = &[
@@ -32,6 +36,8 @@ impl InputState {
             completion_matches: Vec::new(),
             completion_index: 0,
             ghost_text: None,
+            file_completion_active: false,
+            file_completions: Vec::new(),
         }
     }
 
@@ -42,6 +48,15 @@ impl InputState {
         // Update ghost text for slash commands
         if self.buffer.starts_with('/') {
             self.complete_slash();
+        }
+        // Check for @ file completion
+        if c == '@' {
+            self.file_completion_active = true;
+        } else if self.file_completion_active && (c.is_alphanumeric() || c == '/' || c == '.' || c == '_' || c == '-') {
+            // Continue file completion
+        } else {
+            self.file_completion_active = false;
+            self.file_completions.clear();
         }
     }
 
@@ -177,6 +192,68 @@ impl InputState {
         self.update_ghost_text();
     }
 
+    /// Complete file paths after @.
+    pub fn complete_file_path(&mut self, working_dir: &std::path::Path) {
+        if !self.file_completion_active {
+            return;
+        }
+
+        // Find the @ position
+        let at_pos = self.buffer.rfind('@').unwrap_or(0);
+        let prefix = &self.buffer[at_pos + 1..];
+
+        // List files matching the prefix
+        let search_dir = if prefix.contains('/') {
+            let dir_part = prefix.rsplit_once('/').map(|(d, _)| d).unwrap_or(".");
+            working_dir.join(dir_part)
+        } else {
+            working_dir.to_path_buf()
+        };
+
+        let file_prefix = prefix.rsplit_once('/').map(|(_, f)| f).unwrap_or(prefix);
+
+        if let Ok(entries) = std::fs::read_dir(&search_dir) {
+            self.file_completions = entries
+                .filter_map(|e| e.ok())
+                .filter(|e| {
+                    let name = e.file_name().to_string_lossy().to_string();
+                    name.starts_with(file_prefix)
+                })
+                .map(|e| {
+                    let name = e.file_name().to_string_lossy().to_string();
+                    let path = if prefix.contains('/') {
+                        let dir_part = prefix.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+                        format!("{}/{}", dir_part, name)
+                    } else {
+                        name
+                    };
+                    path
+                })
+                .take(10)
+                .collect();
+
+            // Update ghost text
+            if let Some(best) = self.file_completions.first() {
+                if best.len() > prefix.len() {
+                    self.ghost_text = Some(best[prefix.len()..].to_string());
+                }
+            }
+        }
+    }
+
+    /// Accept file completion.
+    pub fn accept_file_completion(&mut self) {
+        if let Some(best) = self.file_completions.first() {
+            let at_pos = self.buffer.rfind('@').unwrap_or(0);
+            let new_buffer = format!("{}@{}", &self.buffer[..at_pos], best);
+            self.buffer = new_buffer;
+            self.cursor_pos = self.buffer.len();
+        }
+        self.file_completion_active = false;
+        self.file_completions.clear();
+        self.ghost_text = None;
+    }
+
     /// Update ghost text based on current completion matches.
     fn update_ghost_text(&mut self) {
         if let Some(best) = self.completion_matches.first() {
@@ -203,5 +280,7 @@ impl InputState {
         self.completion_matches.clear();
         self.completion_index = 0;
         self.ghost_text = None;
+        self.file_completion_active = false;
+        self.file_completions.clear();
     }
 }
