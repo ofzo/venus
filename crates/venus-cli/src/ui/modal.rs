@@ -3,100 +3,113 @@ use ratatui::{
     widgets::*,
 };
 
-/// Render a permission prompt overlay matching Claude Code's Select component.
-/// Claude Code shows "Do you want to proceed?" with a selectable list of options.
+/// Unicode figures matching Claude Code
+const POINTER: &str = "❯";
+
+/// Render a permission prompt matching Claude Code's Select component exactly.
+/// NO borders. Just a list with ❯ indicator.
 pub fn render(
     frame: &mut Frame,
     area: Rect,
     tool_name: &str,
     description: &str,
+    selected_option: usize,
 ) {
-    let popup_width = (area.width * 60 / 100).min(60);
-    let popup_height = 10;
-    let x = (area.width.saturating_sub(popup_width)) / 2;
-    let y = (area.height.saturating_sub(popup_height)) / 2;
-    let popup_area = Rect::new(x, y, popup_width, popup_height);
+    // Claude Code's PermissionPrompt layout:
+    // <Box flexDirection="column">
+    //   <Text>{questionText}</Text>
+    //   <Select options={options} .../>
+    //   <Box marginTop={1}>
+    //     <Text dimColor>Esc to cancel</Text>
+    //   </Box>
+    // </Box>
 
-    // Background
+    let content_width = (area.width * 60 / 100).min(60);
+    let x = (area.width.saturating_sub(content_width)) / 2;
+    let y = (area.height.saturating_sub(10)) / 2;
+
+    // Clear background
     let bg = Block::default().style(Style::default().bg(Color::Black));
-    frame.render_widget(bg, popup_area);
+    frame.render_widget(bg, Rect::new(x, y, content_width, 10));
 
-    let content = vec![
-        // Question text (matching Claude Code's "Do you want to proceed?")
-        Line::from(Span::styled(
+    let mut current_y = y;
+
+    // Question text (matching Claude Code's "Do you want to proceed?")
+    let question_area = Rect::new(x + 2, current_y, content_width.saturating_sub(4), 1);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
             "Do you want to proceed?",
             Style::default().add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
-        // Tool info
-        Line::from(vec![
+        ))),
+        question_area,
+    );
+    current_y += 1;
+
+    // Tool info
+    let tool_area = Rect::new(x + 2, current_y, content_width.saturating_sub(4), 1);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
             Span::styled(
-                format!("  {} ", tool_name),
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
+                tool_name,
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
             ),
+            Span::raw("  "),
             Span::styled(
                 description,
                 Style::default().fg(Color::DarkGray),
             ),
-        ]),
-        Line::from(""),
-        // Select options (matching Claude Code's Select component style)
-        Line::from(vec![
-            Span::styled(
-                "  ▸ ",
-                Style::default().fg(Color::Green),
-            ),
-            Span::styled(
-                "Yes",
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                " — allow this operation",
-                Style::default().fg(Color::DarkGray),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled(
-                "    ",
-                Style::default(),
-            ),
-            Span::styled(
-                "Yes, and always allow",
-                Style::default().fg(Color::White),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled(
-                "    ",
-                Style::default(),
-            ),
-            Span::styled(
-                "No",
-                Style::default().fg(Color::White),
-            ),
-        ]),
-        Line::from(""),
-        // Footer hint (matching Claude Code's dimColor style)
-        Line::from(Span::styled(
-            "↑↓ to select · Enter to confirm · Esc to cancel",
-            Style::default().fg(Color::DarkGray),
-        )),
+        ])),
+        tool_area,
+    );
+    current_y += 2;
+
+    // Select options (matching Claude Code's Select component style)
+    let options = [
+        "Yes — allow this operation",
+        "Yes, and always allow",
+        "No",
     ];
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow))
-        .title(Span::styled(
-            " Permission Required ",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        ));
+    for (i, option) in options.iter().enumerate() {
+        let is_focused = i == selected_option;
+        let opt_area = Rect::new(x + 2, current_y, content_width.saturating_sub(4), 1);
 
-    let paragraph = Paragraph::new(content).block(block);
-    frame.render_widget(paragraph, popup_area);
+        let mut spans = Vec::new();
+
+        // Left indicator: ❯ for focused
+        if is_focused {
+            spans.push(Span::styled(
+                POINTER,
+                Style::default().fg(Color::Cyan), // "suggestion" color
+            ));
+        } else {
+            spans.push(Span::raw(" "));
+        }
+
+        // Gap
+        spans.push(Span::raw(" "));
+
+        // Option text
+        let text_style = if is_focused {
+            Style::default().fg(Color::Cyan) // "suggestion" color
+        } else {
+            Style::default()
+        };
+        spans.push(Span::styled(option.to_string(), text_style));
+
+        frame.render_widget(Paragraph::new(Line::from(spans)), opt_area);
+        current_y += 1;
+    }
+
+    current_y += 1;
+
+    // Footer hint (matching Claude Code's dimColor style)
+    let hint_area = Rect::new(x + 2, current_y, content_width.saturating_sub(4), 1);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            "Esc to cancel",
+            Style::default().fg(Color::DarkGray),
+        ))),
+        hint_area,
+    );
 }

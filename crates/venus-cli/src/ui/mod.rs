@@ -41,7 +41,7 @@ pub fn render(frame: &mut Frame, app: &App) {
     match app.input_mode {
         InputMode::PermissionPrompt => {
             if let Some(ref pending) = app.pending_permission {
-                modal::render(frame, area, &pending.tool_name, &pending.description);
+                modal::render(frame, area, &pending.tool_name, &pending.description, pending.selected_option);
             }
         }
         InputMode::Picker => {

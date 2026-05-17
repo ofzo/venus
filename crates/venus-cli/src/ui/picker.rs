@@ -5,142 +5,186 @@ use ratatui::{
 
 use crate::app::{App, PickerSource};
 
-/// Render a picker/list selection overlay centered on the screen.
+/// Unicode figures matching Claude Code's figures.ts
+const POINTER: &str = "❯";     // U+276F - focused item
+const TICK: &str = "✓";        // U+2713 - selected item
+const ARROW_UP: &str = "↑";    // U+2191 - scroll up indicator
+const ARROW_DOWN: &str = "↓";  // U+2193 - scroll down indicator
+const DIVIDER: &str = "─";     // U+2500 - horizontal line
+
+/// Render a picker overlay matching Claude Code's Select component exactly.
+/// NO borders. Pane layout with colored divider. Index numbers. ❯ indicator.
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let picker = match &app.picker {
         Some(p) => p,
         None => return,
     };
 
-    // Calculate popup dimensions
+    let is_model_picker = matches!(picker.source, PickerSource::Model);
+    let has_tabs = picker.tab_state.is_some();
+
+    // Calculate max index width (e.g., 9 options = 1 digit)
+    let max_index_width = if picker.items.len() >= 10 { 2 } else { 1 };
+
+    // Calculate max label width for two-column alignment
     let max_label_width = picker.items.iter()
-        .map(|i| {
-            let label_w = i.label.chars().count() as u16;
-            let desc_w = if i.description.is_empty() { 0 } else { i.description.chars().count() as u16 + 3 };
-            label_w + desc_w
-        })
+        .map(|i| i.label.chars().count() as u16)
         .max()
-        .unwrap_or(20)
-        .max(picker.title.chars().count() as u16 + 4);
-    let popup_width = (max_label_width + 6).min(area.width.saturating_sub(4)).max(30);
+        .unwrap_or(10)
+        .min(30);
+
+    // Layout: Pane style (matching Claude Code's Pane component)
+    // paddingTop=1, Divider, paddingX=2, content, hint at bottom
+    let pane_padding_top = 1u16;
+    let divider_height = 1u16;
+    let hint_height = if is_model_picker { 2 } else { 1 }; // effort display + key hints
+    let tab_height = if has_tabs { 1 } else { 0 };
     let visible_count = picker.visible_count.min(picker.items.len()) as u16;
 
-    // Extra lines for model picker (effort display) and tabs
-    let extra_lines = if matches!(picker.source, PickerSource::Model) { 2 } else { 0 };
-    let tab_lines = if picker.tab_state.is_some() { 1 } else { 0 };
+    let content_height = visible_count + pane_padding_top + divider_height + hint_height + tab_height;
+    let popup_height = content_height.min(area.height.saturating_sub(2));
+    let popup_width = area.width.saturating_sub(4); // paddingX=2 on each side
 
-    // +2 for borders, +1 for hint footer, +extra for model picker, +tabs
-    let popup_height = (visible_count + 3 + extra_lines + tab_lines).min(area.height.saturating_sub(2));
-
-    let x = (area.width.saturating_sub(popup_width)) / 2;
+    let x = 2; // paddingX=2
     let y = (area.height.saturating_sub(popup_height)) / 2;
     let popup_area = Rect::new(x, y, popup_width, popup_height);
 
-    // Dim background behind popup
+    // Clear background
     let bg = Block::default().style(Style::default().bg(Color::Black));
     frame.render_widget(bg, popup_area);
 
-    // Render tabs if present
     let mut current_y = popup_area.y;
-    if let Some(ref tab_state) = picker.tab_state {
-        let tab_area = Rect::new(popup_area.x, current_y, popup_width, 1);
-        let mut tab_spans = vec![Span::styled(
-            format!("  {}: ", picker.title),
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-        )];
+
+    // 1. Top padding (1 line)
+    current_y += pane_padding_top;
+
+    // 2. Divider line (colored based on source)
+    let divider_color = match picker.source {
+        PickerSource::Help => Color::Blue,      // "professionalBlue"
+        PickerSource::Model => Color::Yellow,   // "remember"
+        _ => Color::Yellow,                     // "permission"
+    };
+    let divider_area = Rect::new(popup_area.x, current_y, popup_width, 1);
+    let divider_line = if has_tabs {
+        // Tabs in divider
+        let tab_state = picker.tab_state.as_ref().unwrap();
+        let mut spans = vec![];
         for (i, tab) in tab_state.tabs.iter().enumerate() {
-            let is_selected = i == tab_state.selected_tab;
-            let style = if is_selected {
+            if i > 0 {
+                spans.push(Span::raw(" "));
+            }
+            let is_current = i == tab_state.selected_tab;
+            let style = if is_current {
                 Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::DarkGray)
             };
-            tab_spans.push(Span::styled(format!(" {} ", tab), style));
-            if i < tab_state.tabs.len() - 1 {
-                tab_spans.push(Span::styled(" ", Style::default()));
-            }
+            spans.push(Span::styled(format!(" {} ", tab), style));
         }
-        let tab_line = Line::from(tab_spans);
-        let tab_paragraph = Paragraph::new(tab_line).style(Style::default().bg(Color::Black));
-        frame.render_widget(tab_paragraph, tab_area);
-        current_y += 1;
-    }
-
-    // Build list items
-    let items: Vec<ListItem> = picker.items
-        .iter()
-        .enumerate()
-        .skip(picker.scroll_offset)
-        .take(picker.visible_count)
-        .map(|(i, item)| {
-            let is_selected = i == picker.selected;
-            let is_separator = item.value.is_empty() && item.description.is_empty();
-
-            if is_separator {
-                return ListItem::new(Line::from(Span::styled(
-                    format!("  {}", item.label),
-                    Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
-                )));
-            }
-
-            let style = if is_selected {
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::White)
-            };
-
-            let prefix = if is_selected { "▸ " } else { "  " };
-            let desc_style = if is_selected {
-                Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)
-            } else {
-                Style::default().fg(Color::DarkGray)
-            };
-
-            let mut spans = vec![
-                Span::styled(prefix, style),
-                Span::styled(item.label.clone(), style),
-            ];
-            if !item.description.is_empty() {
-                spans.push(Span::styled(format!(" — {}", item.description), desc_style));
-            }
-            ListItem::new(Line::from(spans))
-        })
-        .collect();
-
-    // Scroll indicator in title
-    let total = picker.items.len();
-    let scroll_info = if total > picker.visible_count {
-        let end = (picker.scroll_offset + picker.visible_count).min(total);
-        format!(" {}/{} ", end, total)
+        Line::from(spans)
     } else {
-        String::new()
+        Line::from(Span::styled(
+            DIVIDER.repeat(popup_width as usize),
+            Style::default().fg(divider_color),
+        ))
     };
+    frame.render_widget(Paragraph::new(divider_line), divider_area);
+    current_y += 1;
 
-    let title = if picker.tab_state.is_some() {
-        "".to_string() // Tabs already shown
-    } else {
-        format!(" {}{} ", picker.title, scroll_info)
-    };
+    // 3. Content area with paddingX=2
+    let content_x = popup_area.x + 2;
+    let content_width = popup_width.saturating_sub(4);
 
-    // Split popup into list area, effort area (for model picker), and hint area
-    let list_height = popup_height.saturating_sub(1 + extra_lines + tab_lines);
-    let list_area = Rect::new(popup_area.x, current_y, popup_width, list_height);
-    let hint_area = Rect::new(popup_area.x, popup_area.y + popup_height - 1, popup_width, 1);
+    // Render each visible item
+    for (vis_idx, item_idx) in (picker.scroll_offset..picker.scroll_offset + picker.visible_count).enumerate() {
+        if item_idx >= picker.items.len() {
+            break;
+        }
+        let item = &picker.items[item_idx];
+        let is_focused = item_idx == picker.selected;
+        let is_separator = item.value.is_empty() && item.description.is_empty();
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
-        .title(Span::styled(
-            title,
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        let item_y = current_y + vis_idx as u16;
+        let item_area = Rect::new(content_x, item_y, content_width, 1);
+
+        if is_separator {
+            // Separator line (dimmed)
+            let sep = Paragraph::new(Line::from(Span::styled(
+                item.label.clone(),
+                Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
+            )));
+            frame.render_widget(sep, item_area);
+            continue;
+        }
+
+        // Build item spans
+        let mut spans = Vec::new();
+
+        // Left indicator: ❯ for focused, ↑/↓ for scroll edges, space otherwise
+        if is_focused {
+            spans.push(Span::styled(
+                POINTER,
+                Style::default().fg(Color::Cyan), // "suggestion" color
+            ));
+        } else if vis_idx == 0 && picker.scroll_offset > 0 {
+            // First visible item, more above
+            spans.push(Span::styled(
+                ARROW_UP,
+                Style::default().fg(Color::DarkGray),
+            ));
+        } else if vis_idx == picker.visible_count - 1 && item_idx + 1 < picker.items.len() {
+            // Last visible item, more below
+            spans.push(Span::styled(
+                ARROW_DOWN,
+                Style::default().fg(Color::DarkGray),
+            ));
+        } else {
+            spans.push(Span::raw(" "));
+        }
+
+        // Gap
+        spans.push(Span::raw(" "));
+
+        // Index number (compact layout)
+        let index_str = format!("{:>width$}.", item_idx + 1, width = max_index_width as usize);
+        spans.push(Span::styled(
+            index_str,
+            Style::default().fg(Color::DarkGray),
         ));
 
-    let list = List::new(items).block(block);
-    frame.render_widget(list, list_area);
+        // Gap
+        spans.push(Span::raw(" "));
 
-    // Render effort display for model picker (matching Claude Code's ModelPicker)
-    if matches!(picker.source, PickerSource::Model) && extra_lines > 0 {
-        let effort_area = Rect::new(popup_area.x, current_y + list_height, popup_width, extra_lines);
+        // Label text
+        let label_style = if is_focused {
+            Style::default().fg(Color::Cyan) // "suggestion" color
+        } else {
+            Style::default()
+        };
+        spans.push(Span::styled(item.label.clone(), label_style));
+
+        // Right checkmark for selected items (not applicable for single-select pickers)
+        // Skip for now as our pickers are single-select
+
+        // Description (right-aligned in two-column layout)
+        if !item.description.is_empty() {
+            let label_pad = max_label_width.saturating_sub(item.label.chars().count() as u16);
+            let padding = " ".repeat((label_pad + 2).min(20) as usize);
+            spans.push(Span::raw(padding));
+            spans.push(Span::styled(
+                item.description.clone(),
+                Style::default().fg(Color::DarkGray), // "inactive" color
+            ));
+        }
+
+        let line = Line::from(spans);
+        frame.render_widget(Paragraph::new(line), item_area);
+    }
+
+    current_y += visible_count;
+
+    // 4. Effort display for model picker
+    if is_model_picker {
         let effort = app.get_effort_label();
         let effort_indicator = match effort {
             "low" => "○",
@@ -149,24 +193,32 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             "max" => "◉",
             _ => "○",
         };
-        let effort_text = format!("  {} {} effort  ← → to adjust", effort_indicator, effort);
-        let effort_paragraph = Paragraph::new(Line::from(vec![
-            Span::styled(effort_text, Style::default().fg(Color::DarkGray)),
-        ]))
-        .style(Style::default().bg(Color::Black));
-        frame.render_widget(effort_paragraph, effort_area);
+        let effort_area = Rect::new(content_x, current_y, content_width, 1);
+        let effort_line = Line::from(vec![
+            Span::styled(
+                format!("{} {} effort", effort_indicator, effort),
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::raw("  "),
+            Span::styled(
+                "← → to adjust",
+                Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
+            ),
+        ]);
+        frame.render_widget(Paragraph::new(effort_line), effort_area);
+        current_y += 1;
     }
 
-    // Render keyboard hint at bottom
-    let hint = Paragraph::new(Line::from(vec![
-        Span::styled(" ↑↓", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-        Span::styled(" navigate ", Style::default().fg(Color::DarkGray)),
-        Span::styled("Enter", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-        Span::styled(" select ", Style::default().fg(Color::DarkGray)),
-        Span::styled("Esc", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-        Span::styled(" cancel", Style::default().fg(Color::DarkGray)),
-    ]))
-    .alignment(Alignment::Center)
-    .style(Style::default().bg(Color::Black));
-    frame.render_widget(hint, hint_area);
+    // 5. Key hints at bottom (matching Claude Code's KeyboardShortcutHint style)
+    let hint_area = Rect::new(content_x, current_y, content_width, 1);
+    let hint_line = Line::from(vec![
+        Span::styled("Enter", Style::default().add_modifier(Modifier::BOLD)),
+        Span::raw(" to confirm  "),
+        Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
+        Span::raw(" to cancel"),
+    ]);
+    frame.render_widget(
+        Paragraph::new(hint_line).style(Style::default().fg(Color::DarkGray)),
+        hint_area,
+    );
 }

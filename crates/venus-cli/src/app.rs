@@ -351,25 +351,47 @@ impl App {
             _ => {}
         }
 
-        // Picker mode navigation
+        // Picker mode navigation (matching Claude Code's Select component keybindings)
         if self.input_mode == InputMode::Picker {
             match (key.modifiers, key.code) {
+                // Cancel
                 (_, KeyCode::Esc) => {
                     self.picker = None;
                     self.input_mode = InputMode::Normal;
                 }
-                (_, KeyCode::Up) | (KeyModifiers::CONTROL, KeyCode::Char('p')) => {
+                // Navigate up: up/k/ctrl+p
+                (_, KeyCode::Up)
+                | (_, KeyCode::Char('k'))
+                | (KeyModifiers::CONTROL, KeyCode::Char('p')) => {
                     if let Some(ref mut p) = self.picker {
                         p.move_up();
                     }
                 }
-                (_, KeyCode::Down) | (KeyModifiers::CONTROL, KeyCode::Char('n')) => {
+                // Navigate down: down/j/ctrl+n
+                (_, KeyCode::Down)
+                | (_, KeyCode::Char('j'))
+                | (KeyModifiers::CONTROL, KeyCode::Char('n')) => {
                     if let Some(ref mut p) = self.picker {
                         p.move_down();
                     }
                 }
+                // PageUp/PageDown
+                (_, KeyCode::PageUp) => {
+                    if let Some(ref mut p) = self.picker {
+                        for _ in 0..p.visible_count {
+                            p.move_up();
+                        }
+                    }
+                }
+                (_, KeyCode::PageDown) => {
+                    if let Some(ref mut p) = self.picker {
+                        for _ in 0..p.visible_count {
+                            p.move_down();
+                        }
+                    }
+                }
                 // Left/Right arrows - adjust effort in model picker or switch tabs
-                (_, KeyCode::Left) => {
+                (_, KeyCode::Left) | (_, KeyCode::Tab) if key.code == KeyCode::Left => {
                     if let Some(ref p) = self.picker {
                         if matches!(p.source, PickerSource::Model) {
                             self.cycle_effort(-1);
@@ -387,6 +409,30 @@ impl App {
                         }
                     }
                 }
+                // Tab/Shift+Tab for tab switching
+                (KeyModifiers::SHIFT, KeyCode::BackTab) => {
+                    if let Some(ref p) = self.picker {
+                        if p.tab_state.is_some() {
+                            self.picker_tab_prev();
+                        }
+                    }
+                }
+                // Number keys 1-9 to jump to option
+                (_, KeyCode::Char(c)) if c.is_ascii_digit() && c != '0' => {
+                    if let Some(ref mut p) = self.picker {
+                        let idx = c.to_digit(10).unwrap() as usize - 1;
+                        if idx < p.items.len() {
+                            p.selected = idx;
+                            // Adjust scroll if needed
+                            if p.selected < p.scroll_offset {
+                                p.scroll_offset = p.selected;
+                            } else if p.selected >= p.scroll_offset + p.visible_count {
+                                p.scroll_offset = p.selected - p.visible_count + 1;
+                            }
+                        }
+                    }
+                }
+                // Accept: Enter
                 (_, KeyCode::Enter) => {
                     self.handle_picker_select().await?;
                 }
