@@ -1127,6 +1127,9 @@ impl App {
 
     /// Update picker items based on the selected tab.
     fn update_picker_items_for_tab(&mut self) {
+        // Get effort label before mutable borrow of picker
+        let effort_label = self.get_effort_label().to_string();
+
         if let Some(ref mut picker) = self.picker {
             let tab_idx = picker.tab_state.as_ref().map(|t| t.selected_tab).unwrap_or(0);
 
@@ -1172,6 +1175,96 @@ impl App {
                             PickerItem { label: "/effort".into(), description: "Set effort level".into(), value: "/effort".into() },
                             PickerItem { label: "/quit".into(), description: "Exit Venus".into(), value: "/quit".into() },
                         ]
+                    };
+                    picker.selected = 0;
+                    picker.scroll_offset = 0;
+                }
+                PickerSource::Config => {
+                    picker.items = match tab_idx {
+                        0 => {
+                            // Status tab
+                            vec![
+                                PickerItem {
+                                    label: "Session".into(),
+                                    description: format!("ID: {}", &self.engine.session_id[..8.min(self.engine.session_id.len())]),
+                                    value: "".into(),
+                                },
+                                PickerItem {
+                                    label: "Model".into(),
+                                    description: self.engine.model.clone(),
+                                    value: "".into(),
+                                },
+                                PickerItem {
+                                    label: "Working Directory".into(),
+                                    description: self.engine.working_dir.display().to_string(),
+                                    value: "".into(),
+                                },
+                                PickerItem {
+                                    label: "Messages".into(),
+                                    description: format!("{}", self.engine.messages.try_lock().map(|m| m.len()).unwrap_or(0)),
+                                    value: "".into(),
+                                },
+                                PickerItem {
+                                    label: "Cost".into(),
+                                    description: self.engine.cost_tracker.lock().unwrap().format_cost(),
+                                    value: "".into(),
+                                },
+                            ]
+                        }
+                        1 => {
+                            // Config tab
+                            vec![
+                                PickerItem {
+                                    label: "Model".into(),
+                                    description: format!("Current: {}", self.engine.model),
+                                    value: "model".into(),
+                                },
+                                PickerItem {
+                                    label: "Theme".into(),
+                                    description: format!("Current: {}", self.engine.theme),
+                                    value: "theme".into(),
+                                },
+                                PickerItem {
+                                    label: "Permission Mode".into(),
+                                    description: format!("Current: {}", self.engine.settings.permission_mode.as_deref().unwrap_or("default")),
+                                    value: "permissions".into(),
+                                },
+                                PickerItem {
+                                    label: "Thinking Mode".into(),
+                                    description: format!("Current: {}", self.engine.settings.thinking.as_ref()
+                                        .and_then(|t| t.mode.as_deref())
+                                        .unwrap_or("disabled")),
+                                    value: "thinking".into(),
+                                },
+                                PickerItem {
+                                    label: "Effort Level".into(),
+                                    description: format!("Current: {}", effort_label),
+                                    value: "effort".into(),
+                                },
+                                PickerItem {
+                                    label: "Prompt Color".into(),
+                                    description: format!("Current: {}", self.engine.prompt_color),
+                                    value: "color".into(),
+                                },
+                            ]
+                        }
+                        2 => {
+                            // Usage tab
+                            let tracker = self.engine.cost_tracker.lock().unwrap();
+                            vec![
+                                PickerItem {
+                                    label: "Total Cost".into(),
+                                    description: tracker.format_cost(),
+                                    value: "".into(),
+                                },
+                                PickerItem {
+                                    label: "Total Tokens".into(),
+                                    description: tracker.format_tokens(),
+                                    value: "".into(),
+                                },
+                            ]
+                        }
+                        _ => vec![],
                     };
                     picker.selected = 0;
                     picker.scroll_offset = 0;
@@ -1320,15 +1413,39 @@ impl App {
         self.input_mode = InputMode::Picker;
     }
 
-    /// Open the config settings picker.
+    /// Open the config settings picker with tabs (matching Claude Code's Settings).
     fn open_config_picker(&mut self) {
-        let perm_mode = self.engine.settings.permission_mode.as_deref().unwrap_or("default");
-        let thinking_mode = self.engine.settings.thinking.as_ref()
-            .and_then(|t| t.mode.as_deref())
-            .unwrap_or("disabled");
-        let effort = self.get_effort_label();
+        // Status tab items
+        let status_items = vec![
+            PickerItem {
+                label: "Session".into(),
+                description: format!("ID: {}", &self.engine.session_id[..8.min(self.engine.session_id.len())]),
+                value: "".into(),
+            },
+            PickerItem {
+                label: "Model".into(),
+                description: self.engine.model.clone(),
+                value: "".into(),
+            },
+            PickerItem {
+                label: "Working Directory".into(),
+                description: self.engine.working_dir.display().to_string(),
+                value: "".into(),
+            },
+            PickerItem {
+                label: "Messages".into(),
+                description: format!("{}", self.engine.messages.try_lock().map(|m| m.len()).unwrap_or(0)),
+                value: "".into(),
+            },
+            PickerItem {
+                label: "Cost".into(),
+                description: self.engine.cost_tracker.lock().unwrap().format_cost(),
+                value: "".into(),
+            },
+        ];
 
-        let items = vec![
+        // Config tab items
+        let config_items = vec![
             PickerItem {
                 label: "Model".into(),
                 description: format!("Current: {}", self.engine.model),
@@ -1341,17 +1458,19 @@ impl App {
             },
             PickerItem {
                 label: "Permission Mode".into(),
-                description: format!("Current: {} (Shift+Tab to cycle)", perm_mode),
+                description: format!("Current: {}", self.engine.settings.permission_mode.as_deref().unwrap_or("default")),
                 value: "permissions".into(),
             },
             PickerItem {
                 label: "Thinking Mode".into(),
-                description: format!("Current: {} (Alt+T to toggle)", thinking_mode),
+                description: format!("Current: {}", self.engine.settings.thinking.as_ref()
+                    .and_then(|t| t.mode.as_deref())
+                    .unwrap_or("disabled")),
                 value: "thinking".into(),
             },
             PickerItem {
                 label: "Effort Level".into(),
-                description: format!("Current: {}", effort),
+                description: format!("Current: {}", self.get_effort_label()),
                 value: "effort".into(),
             },
             PickerItem {
@@ -1361,7 +1480,25 @@ impl App {
             },
         ];
 
-        let picker = PickerState::new("Settings".into(), items, PickerSource::Config);
+        // Usage tab items
+        let tracker = self.engine.cost_tracker.lock().unwrap();
+        let usage_items = vec![
+            PickerItem {
+                label: "Total Cost".into(),
+                description: tracker.format_cost(),
+                value: "".into(),
+            },
+            PickerItem {
+                label: "Total Tokens".into(),
+                description: tracker.format_tokens(),
+                value: "".into(),
+            },
+        ];
+        drop(tracker);
+
+        let tabs = vec!["Status".to_string(), "Config".to_string(), "Usage".to_string()];
+        let picker = PickerState::new("Settings".into(), status_items, PickerSource::Config)
+            .with_tabs(tabs);
         self.picker = Some(picker);
         self.input_mode = InputMode::Picker;
     }
