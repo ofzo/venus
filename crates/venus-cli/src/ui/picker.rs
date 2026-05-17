@@ -152,17 +152,20 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 
         let mut spans = Vec::new();
 
+        // ListItem layout: indicator(1) + gap(1) + content
+        // Description: paddingLeft=2 (2 spaces indent)
+
         if is_config && !item.description.is_empty() {
-            // Config two-column layout: fixed width=44 left column
-            // {pointer_or_space} {label}  {value}
+            // Config two-column: fixed width left column
             let left_width: usize = 30;
 
-            // Indicator
+            // Indicator (1 char)
             if is_focused {
                 spans.push(Span::styled(POINTER, Style::default().fg(Color::Cyan)));
             } else {
                 spans.push(Span::raw(" "));
             }
+            // Gap (1 space)
             spans.push(Span::raw(" "));
 
             // Label
@@ -174,19 +177,20 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             spans.push(Span::styled(item.label.clone(), label_style));
 
             // Padding to align values
-            let used = 2 + item.label.chars().count(); // indicator + space + label
+            let used = 2 + item.label.chars().count();
             let padding = left_width.saturating_sub(used);
             if padding > 0 {
                 spans.push(Span::raw(" ".repeat(padding)));
             }
 
-            // Value (dimColor for config)
+            // Value
             spans.push(Span::styled(
                 item.description.clone(),
                 Style::default().fg(Color::DarkGray),
             ));
         } else if has_descriptions && !item.description.is_empty() {
             // Two-column layout (matching TwoColumnRow exactly)
+            // Indicator (1 char)
             if is_focused {
                 spans.push(Span::styled(POINTER, Style::default().fg(Color::Cyan)));
             } else if vis_idx == 0 && picker.scroll_offset > 0 {
@@ -196,9 +200,10 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             } else {
                 spans.push(Span::raw(" "));
             }
+            // Gap (1 space)
             spans.push(Span::raw(" "));
 
-            // Index + Label
+            // Index + Label (inside same Text, index dimColor)
             let index_str = format!("{:>width$}.", item_idx + 1, width = max_index_width);
             let padded = format!("{:<width$}", index_str, width = index_pad);
             spans.push(Span::styled(padded, Style::default().fg(Color::DarkGray)));
@@ -210,7 +215,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             };
             spans.push(Span::styled(item.label.clone(), label_style));
 
-            // Padding
+            // Padding to align descriptions
             let used_width: usize = 1 + 1 + index_pad + item.label.chars().count();
             let label_col_width: usize = 30;
             let padding = label_col_width.saturating_sub(used_width);
@@ -218,7 +223,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                 spans.push(Span::raw(" ".repeat(padding)));
             }
 
-            // Description
+            // Description (marginLeft=2)
             spans.push(Span::raw("  "));
             spans.push(Span::styled(
                 item.description.clone(),
@@ -226,6 +231,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             ));
         } else {
             // Compact layout (no descriptions)
+            // Indicator (1 char)
             if is_focused {
                 spans.push(Span::styled(POINTER, Style::default().fg(Color::Cyan)));
             } else if vis_idx == 0 && picker.scroll_offset > 0 {
@@ -235,8 +241,10 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             } else {
                 spans.push(Span::raw(" "));
             }
+            // Gap (1 space)
             spans.push(Span::raw(" "));
 
+            // Index + Label
             let index_str = format!("{:>width$}.", item_idx + 1, width = max_index_width);
             let padded = format!("{:<width$}", index_str, width = index_pad);
             spans.push(Span::styled(padded, Style::default().fg(Color::DarkGray)));
