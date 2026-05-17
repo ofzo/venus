@@ -54,6 +54,27 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         ));
     }
 
+    // Thinking mode indicator
+    let thinking_mode = app.engine.settings.thinking.as_ref()
+        .and_then(|t| t.mode.as_deref())
+        .unwrap_or("disabled");
+    if thinking_mode != "disabled" {
+        spans.push(Span::raw(" │ "));
+        spans.push(Span::styled(
+            "think",
+            Style::default().fg(Color::Magenta).add_modifier(Modifier::DIM),
+        ));
+    }
+
+    // Session name if set
+    if let Some(ref name) = app.engine.session_name {
+        spans.push(Span::raw(" │ "));
+        spans.push(Span::styled(
+            name.clone(),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+
     if let Some(ref branch) = app.branch {
         spans.push(Span::raw(" │ "));
         spans.push(Span::styled(
