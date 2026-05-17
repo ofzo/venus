@@ -10,6 +10,8 @@ pub struct SessionMeta {
     pub updated_at: u64,
     pub message_count: usize,
     pub model: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -116,6 +118,7 @@ mod tests {
             updated_at: 2000,
             message_count: 5,
             model: "venus-3".to_string(),
+            name: None,
         };
         let json = serde_json::to_string(&meta).unwrap();
         let deserialized: SessionMeta = serde_json::from_str(&json).unwrap();

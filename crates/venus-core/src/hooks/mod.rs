@@ -1,7 +1,9 @@
 pub mod events;
 pub mod matcher;
 
+use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use serde_json::Value;
@@ -16,6 +18,8 @@ pub struct HookRunner {
     config: Option<HookConfig>,
     session_id: String,
     cwd: PathBuf,
+    /// Tracks hooks marked with `once: true` that have already run this session.
+    ran_once: Arc<Mutex<HashSet<String>>>,
 }
 
 struct HookOutput {
@@ -31,12 +35,18 @@ impl HookRunner {
             config,
             session_id,
             cwd,
+            ran_once: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
     /// Update the session ID (called after engine creates its real session ID).
     pub fn set_session_id(&mut self, session_id: String) {
         self.session_id = session_id;
+    }
+
+    /// Get the current session ID.
+    pub fn session_id(&self) -> &str {
+        &self.session_id
     }
 
     /// Run PreToolUse hooks. If any hook denies, returns a deny response.
@@ -203,6 +213,50 @@ impl HookRunner {
         // Check if this is an HTTP hook
         if hook.hook_type.as_deref() == Some("http") {
             return self.execute_http_hook(hook, event).await;
+        }
+
+        // Check `once` flag: skip if this hook already ran this session
+        if hook.once {
+            let key = format!("{}:{}", event.event_name(), hook.command);
+            let mut ran = self.ran_once.lock().unwrap();
+            if ran.contains(&key) {
+                debug!("skipping once hook: {}", hook.command);
+                return Ok(HookOutput {
+                    exit_code: 0,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                });
+            }
+            ran.insert(key);
+        }
+
+        // Check `if` condition: run as shell command, skip if non-zero exit
+        if let Some(ref condition) = hook.r#if {
+            debug!("evaluating hook condition: {}", condition);
+            let check = tokio::process::Command::new("sh")
+                .args(["-c", condition])
+                .current_dir(&self.cwd)
+                .output()
+                .await;
+            match check {
+                Ok(output) if !output.status.success() => {
+                    debug!("hook condition failed (exit {}), skipping", output.status.code().unwrap_or(-1));
+                    return Ok(HookOutput {
+                        exit_code: 0,
+                        stdout: String::new(),
+                        stderr: String::new(),
+                    });
+                }
+                Err(e) => {
+                    warn!("hook condition error: {}, skipping", e);
+                    return Ok(HookOutput {
+                        exit_code: 0,
+                        stdout: String::new(),
+                        stderr: String::new(),
+                    });
+                }
+                _ => {} // condition passed
+            }
         }
 
         let payload = serde_json::to_string(event)?;

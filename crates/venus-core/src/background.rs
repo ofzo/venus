@@ -1,12 +1,14 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum BackgroundTaskStatus {
     Running,
     Completed,
@@ -14,12 +16,14 @@ pub enum BackgroundTaskStatus {
     Cancelled,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackgroundTaskInfo {
     pub id: String,
     pub description: String,
     pub started_at: u64,
     pub status: BackgroundTaskStatus,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub output: Option<String>,
 }
 
 struct BackgroundTaskEntry {
@@ -58,6 +62,7 @@ impl BackgroundTaskRuntime {
                 description,
                 started_at: now,
                 status: BackgroundTaskStatus::Running,
+                output: None,
             },
             cancel_token: cancel_token.clone(),
             output: output.clone(),
@@ -66,6 +71,7 @@ impl BackgroundTaskRuntime {
         self.tasks.write().await.insert(id.clone(), entry);
 
         let tasks = self.tasks.clone();
+        let tasks_for_save = self.tasks.clone();
         let task_id = id.clone();
         let token = cancel_token.clone();
 
@@ -75,23 +81,30 @@ impl BackgroundTaskRuntime {
                 _ = token.cancelled() => Err("cancelled".to_string()),
             };
 
-            let mut tasks = tasks.write().await;
-            if let Some(entry) = tasks.get_mut(&task_id) {
-                match result {
-                    Ok(out) => {
-                        *entry.output.lock().await = out;
-                        entry.info.status = BackgroundTaskStatus::Completed;
-                    }
-                    Err(e) => {
-                        if e == "cancelled" {
-                            entry.info.status = BackgroundTaskStatus::Cancelled;
-                        } else {
-                            *entry.output.lock().await = e.clone();
-                            entry.info.status = BackgroundTaskStatus::Failed(e);
+            {
+                let mut tasks_guard = tasks.write().await;
+                if let Some(entry) = tasks_guard.get_mut(&task_id) {
+                    match result {
+                        Ok(out) => {
+                            entry.info.output = Some(out.clone());
+                            *entry.output.lock().await = out;
+                            entry.info.status = BackgroundTaskStatus::Completed;
+                        }
+                        Err(e) => {
+                            if e == "cancelled" {
+                                entry.info.status = BackgroundTaskStatus::Cancelled;
+                            } else {
+                                entry.info.output = Some(e.clone());
+                                *entry.output.lock().await = e.clone();
+                                entry.info.status = BackgroundTaskStatus::Failed(e);
+                            }
                         }
                     }
                 }
             }
+
+            // Auto-save to disk for cross-session persistence
+            let _ = Self::save_tasks_to_disk_static(&tasks_for_save).await;
         });
 
         id
@@ -127,6 +140,49 @@ impl BackgroundTaskRuntime {
             .values()
             .map(|e| e.info.clone())
             .collect()
+    }
+
+    /// Get the persistence file path: ~/.venus/background_tasks.json
+    fn persistence_path() -> PathBuf {
+        let home = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home).join(".venus").join("background_tasks.json")
+    }
+
+    /// Save current task list to disk.
+    pub async fn save_to_disk(&self) -> Result<()> {
+        let tasks = self.list().await;
+        Self::save_tasks_to_disk(&tasks).await
+    }
+
+    /// Save a task list to disk (static helper).
+    async fn save_tasks_to_disk(tasks: &[BackgroundTaskInfo]) -> Result<()> {
+        let path = Self::persistence_path();
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        let json = serde_json::to_string_pretty(tasks)?;
+        tokio::fs::write(&path, json).await?;
+        Ok(())
+    }
+
+    /// Save tasks from the internal HashMap to disk (used in spawned task).
+    async fn save_tasks_to_disk_static(tasks: &RwLock<HashMap<String, BackgroundTaskEntry>>) -> Result<()> {
+        let tasks = tasks.read().await;
+        let infos: Vec<BackgroundTaskInfo> = tasks.values().map(|e| e.info.clone()).collect();
+        Self::save_tasks_to_disk(&infos).await
+    }
+
+    /// Load task list from disk (for display only, not restoring running tasks).
+    pub async fn load_from_disk() -> Result<Vec<BackgroundTaskInfo>> {
+        let path = Self::persistence_path();
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+        let data = tokio::fs::read_to_string(&path).await?;
+        let tasks: Vec<BackgroundTaskInfo> = serde_json::from_str(&data)?;
+        Ok(tasks)
     }
 }
 

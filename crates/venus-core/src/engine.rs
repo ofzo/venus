@@ -9,6 +9,7 @@ use venus_utils::cost::TokenUsage;
 
 use crate::background::BackgroundTaskRuntime;
 use venus_utils::venusmd;
+use venus_utils::claudemd;
 use venus_utils::config::Settings;
 use venus_utils::context_window;
 use venus_utils::cost::CostTracker;
@@ -24,6 +25,12 @@ use crate::tool_registry::ToolRegistry;
 #[derive(Clone)]
 pub struct QueryEngine {
     pub session_id: String,
+    /// Optional display name for the session.
+    pub session_name: Option<String>,
+    /// Prompt color (ANSI color name: blue, green, red, yellow, cyan, magenta, white).
+    pub prompt_color: String,
+    /// Terminal theme (dark, light, auto).
+    pub theme: String,
     /// Auth header name: "Authorization" for Bearer tokens, "x-api-key" for API keys.
     pub auth_header: &'static str,
     /// Auth header value: "Bearer <token>" or raw API key.
@@ -38,6 +45,8 @@ pub struct QueryEngine {
     pub cost_tracker: Arc<std::sync::Mutex<CostTracker>>,
     pub cancel_token: CancellationToken,
     pub working_dir: PathBuf,
+    /// Additional working directories the engine can access.
+    pub additional_working_dirs: Vec<PathBuf>,
     pub system_prompt: String,
     pub task_store: Arc<TaskStore>,
     pub background_runtime: Arc<BackgroundTaskRuntime>,
@@ -90,6 +99,9 @@ impl QueryEngine {
 
         Ok(Self {
             session_id: uuid::Uuid::new_v4().to_string(),
+            session_name: None,
+            prompt_color: "cyan".to_string(),
+            theme: "dark".to_string(),
             auth_header,
             auth_value,
             model,
@@ -102,6 +114,7 @@ impl QueryEngine {
             cost_tracker: Arc::new(std::sync::Mutex::new(CostTracker::new())),
             cancel_token: CancellationToken::new(),
             working_dir,
+            additional_working_dirs: Vec::new(),
             system_prompt,
             task_store,
             background_runtime,
@@ -134,6 +147,9 @@ impl QueryEngine {
     ) -> Self {
         Self {
             session_id: uuid::Uuid::new_v4().to_string(),
+            session_name: None,
+            prompt_color: "cyan".to_string(),
+            theme: "dark".to_string(),
             auth_header,
             auth_value,
             model,
@@ -146,6 +162,7 @@ impl QueryEngine {
             cost_tracker: Arc::new(std::sync::Mutex::new(CostTracker::new())),
             cancel_token: CancellationToken::new(),
             working_dir,
+            additional_working_dirs: Vec::new(),
             system_prompt,
             task_store,
             background_runtime,
@@ -942,6 +959,14 @@ async fn build_system_prompt(working_dir: &std::path::Path) -> String {
         let merged = venusmd::merge_venus_md(&venus_files);
         if !merged.is_empty() {
             parts.push(format!("\n# Instructions\n{}", merged));
+        }
+    }
+
+    // Add CLAUDE.md content (legacy compatibility)
+    if let Ok(claude_files) = claudemd::load_claude_md_files(git_root.as_deref()).await {
+        let merged = claudemd::merge_claude_md(&claude_files);
+        if !merged.is_empty() {
+            parts.push(format!("\n# CLAUDE.md Instructions\n{}", merged));
         }
     }
 

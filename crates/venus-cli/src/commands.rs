@@ -39,6 +39,7 @@ pub async fn handle_command(
     input: &str,
     engine: &mut QueryEngine,
     skill_registry: Option<&Arc<SkillRegistry>>,
+    plugin_registry: Option<&venus_core::plugin_registry::PluginRegistry>,
 ) -> CommandResult {
     let parts: Vec<&str> = input.splitn(2, ' ').collect();
     let cmd = parts[0];
@@ -84,7 +85,7 @@ pub async fn handle_command(
             handle_compact(engine).await;
             CommandResult::Continue
         }
-        "/config" => {
+        "/config" | "/settings" => {
             handle_config(engine).await;
             CommandResult::Continue
         }
@@ -120,10 +121,11 @@ pub async fn handle_command(
                             let time = chrono::DateTime::from_timestamp(s.updated_at as i64, 0)
                                 .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
                                 .unwrap_or_else(|| "unknown".to_string());
+                            let display_name = s.name.as_deref().unwrap_or(&s.id[..8.min(s.id.len())]);
                             eprintlf!(
                                 "  {:>3}. {} | {} msgs | {} | {}",
                                 i + 1,
-                                &s.id[..8],
+                                display_name,
                                 s.message_count,
                                 s.model,
                                 time,
@@ -138,7 +140,7 @@ pub async fn handle_command(
             }
             CommandResult::Continue
         }
-        "/resume" => {
+        "/resume" | "/continue" => {
             let rt = tokio::runtime::Handle::current();
             let arg = parts.get(1).map(|s| s.trim().to_string());
 
@@ -414,6 +416,9 @@ pub async fn handle_command(
             let cost = engine.cost_tracker.lock().unwrap().format_cost();
             let msg_count = engine.messages.lock().await.len();
             eprintlf!("\r\n  Session status:");
+            if let Some(ref name) = engine.session_name {
+                eprintlf!("    Name:       {}", name);
+            }
             eprintlf!("    Uptime:     {}s", uptime);
             eprintlf!("    Messages:   {}", msg_count);
             eprintlf!("    Cost:       {}", cost);
@@ -460,20 +465,45 @@ pub async fn handle_command(
             }
             CommandResult::Continue
         }
-        "/permissions" => {
-            let mode = engine.settings.permission_mode.as_deref().unwrap_or("default");
-            eprintlf!("\r\n  Permission mode: {}", mode);
-            if let Some(ref allow) = engine.settings.always_allow {
-                for rule in allow {
-                    eprintlf!("    ALLOW  {}:{}", rule.tool, rule.pattern.as_deref().unwrap_or("*"));
+        "/permissions" | "/allowed-tools" => {
+            let subcmd = parts.get(1).map(|s| s.trim());
+            match subcmd {
+                Some(mode_arg) if mode_arg.starts_with("mode ") => {
+                    let new_mode = mode_arg[5..].trim();
+                    if ["default", "auto", "bypass"].contains(&new_mode) {
+                        engine.settings = Arc::new({
+                            let mut s = (*engine.settings).clone();
+                            s.permission_mode = Some(new_mode.to_string());
+                            s
+                        });
+                        eprintlf!("  Permission mode set to: {}", new_mode);
+                    } else {
+                        eprintlf!("  Invalid mode. Use: default, auto, bypass");
+                    }
+                }
+                _ => {
+                    let mode = engine.settings.permission_mode.as_deref().unwrap_or("default");
+                    eprintlf!("\r\n  Permission mode: {} (Shift+Tab to cycle)", mode);
+                    if let Some(ref allow) = engine.settings.always_allow {
+                        if !allow.is_empty() {
+                            eprintlf!("\r\n  Allow rules:");
+                            for rule in allow {
+                                eprintlf!("    ALLOW  {}:{}", rule.tool, rule.pattern.as_deref().unwrap_or("*"));
+                            }
+                        }
+                    }
+                    if let Some(ref deny) = engine.settings.always_deny {
+                        if !deny.is_empty() {
+                            eprintlf!("\r\n  Deny rules:");
+                            for rule in deny {
+                                eprintlf!("    DENY   {}:{}", rule.tool, rule.pattern.as_deref().unwrap_or("*"));
+                            }
+                        }
+                    }
+                    eprintlf!("\r\n  Usage: /permissions mode <default|auto|bypass>");
+                    eprintlf!();
                 }
             }
-            if let Some(ref deny) = engine.settings.always_deny {
-                for rule in deny {
-                    eprintlf!("    DENY   {}:{}", rule.tool, rule.pattern.as_deref().unwrap_or("*"));
-                }
-            }
-            eprintlf!();
             CommandResult::Continue
         }
         "/mcp" => {
@@ -492,6 +522,489 @@ pub async fn handle_command(
             }
             CommandResult::Continue
         }
+        "/files" => {
+            // List files tracked by git in the working directory
+            match tokio::process::Command::new("git")
+                .args(["ls-files"])
+                .current_dir(&engine.working_dir)
+                .output()
+                .await
+            {
+                Ok(output) if output.status.success() => {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let files: Vec<&str> = stdout.lines().collect();
+                    eprintlf!("\r\n  Tracked files ({}):", files.len());
+                    for f in files.iter().take(50) {
+                        eprintlf!("    {}", f);
+                    }
+                    if files.len() > 50 {
+                        eprintlf!("    ... and {} more", files.len() - 50);
+                    }
+                    eprintlf!();
+                }
+                _ => {
+                    // Fallback: list files in working directory
+                    eprintlf!("  Not a git repository. Listing working directory:");
+                    if let Ok(entries) = std::fs::read_dir(&engine.working_dir) {
+                        for entry in entries.flatten().take(30) {
+                            if let Some(name) = entry.file_name().to_str() {
+                                if !name.starts_with('.') {
+                                    eprintlf!("    {}", name);
+                                }
+                            }
+                        }
+                    }
+                    eprintlf!();
+                }
+            }
+            CommandResult::Continue
+        }
+        "/keybindings" => {
+            let subcmd = parts.get(1).map(|s| s.trim());
+            match subcmd {
+                Some("save") => {
+                    let config_dir = dirs::home_dir().unwrap_or_default().join(".venus");
+                    let _ = std::fs::create_dir_all(&config_dir);
+                    let kb_path = config_dir.join("keybindings.json");
+                    let bindings = serde_json::json!({
+                        "submit": "Enter",
+                        "newline": "Alt+Enter",
+                        "abort": "Ctrl+C",
+                        "exit": "Ctrl+D",
+                        "complete": "Tab",
+                        "cycle_permission": "Shift+Tab",
+                        "history_up": "Up",
+                        "history_down": "Down",
+                    });
+                    match std::fs::write(&kb_path, serde_json::to_string_pretty(&bindings).unwrap()) {
+                        Ok(()) => eprintlf!("  Keybindings saved to: {}", kb_path.display()),
+                        Err(e) => eprintlf!("  Error saving keybindings: {}", e),
+                    }
+                }
+                Some("load") => {
+                    let kb_path = dirs::home_dir().unwrap_or_default().join(".venus/keybindings.json");
+                    match std::fs::read_to_string(&kb_path) {
+                        Ok(content) => {
+                            eprintlf!("  Loaded keybindings from: {}", kb_path.display());
+                            if let Ok(bindings) = serde_json::from_str::<serde_json::Value>(&content) {
+                                if let Some(obj) = bindings.as_object() {
+                                    for (action, key) in obj {
+                                        eprintlf!("    {} -> {}", action, key);
+                                    }
+                                }
+                            }
+                        }
+                        Err(_) => eprintlf!("  No saved keybindings found. Use /keybindings save first."),
+                    }
+                }
+                _ => {
+                    eprintlf!("\r\n  Keyboard shortcuts:");
+                    eprintlf!("    Enter           Submit input");
+                    eprintlf!("    Alt+Enter       Newline in multi-line input");
+                    eprintlf!("    Ctrl+C          Clear current input / abort query");
+                    eprintlf!("    Ctrl+D          Exit");
+                    eprintlf!("    Tab             Autocomplete slash commands");
+                    eprintlf!("    Shift+Tab       Cycle permission mode");
+                    eprintlf!("    Up/Down         Navigate history");
+                    eprintlf!("\r\n  Keybindings management:");
+                    eprintlf!("    /keybindings save   Save current keybindings to ~/.venus/keybindings.json");
+                    eprintlf!("    /keybindings load   Load keybindings from config file");
+                    eprintlf!("\r\n  Slash commands: /help");
+                    eprintlf!();
+                }
+            }
+            CommandResult::Continue
+        }
+        "/color" => {
+            let color = parts.get(1).map(|s| s.trim());
+            match color {
+                Some("blue") | Some("green") | Some("red") | Some("yellow") | Some("cyan") | Some("magenta") | Some("white") => {
+                    engine.prompt_color = color.unwrap().to_string();
+                    eprintlf!("  Prompt color set to: {}", color.unwrap());
+                }
+                Some(other) => {
+                    eprintlf!("  Unknown color: {}. Available: blue, green, red, yellow, cyan, magenta, white", other);
+                }
+                None => {
+                    eprintlf!("  Current prompt color: {}", engine.prompt_color);
+                    eprintlf!("  Usage: /color <blue|green|red|yellow|cyan|magenta|white>");
+                }
+            }
+            CommandResult::Continue
+        }
+        "/theme" => {
+            let theme = parts.get(1).map(|s| s.trim());
+            match theme {
+                Some("dark") | Some("light") | Some("auto") => {
+                    engine.theme = theme.unwrap().to_string();
+                    eprintlf!("  Theme set to: {}", theme.unwrap());
+                }
+                Some(other) => {
+                    eprintlf!("  Unknown theme: {}. Available: dark, light, auto", other);
+                }
+                None => {
+                    eprintlf!("  Current theme: {}", engine.theme);
+                    eprintlf!("  Usage: /theme <dark|light|auto>");
+                }
+            }
+            CommandResult::Continue
+        }
+        "/sandbox-toggle" => {
+            // Toggle sandbox mode (bypass permissions on/off)
+            let current = engine.settings.permission_mode.as_deref().unwrap_or("default");
+            let next = if current == "bypass" { "default" } else { "bypass" };
+            engine.settings = Arc::new({
+                let mut s = (*engine.settings).clone();
+                s.permission_mode = Some(next.to_string());
+                s
+            });
+            eprintlf!("  Sandbox mode: {}", if next == "bypass" { "OFF (bypass)" } else { "ON (default)" });
+            CommandResult::Continue
+        }
+        "/ps" => {
+            let tasks = engine.background_runtime.list().await;
+            // Also load persisted tasks from disk
+            let persisted = venus_core::background::BackgroundTaskRuntime::load_from_disk()
+                .await
+                .unwrap_or_default();
+            if tasks.is_empty() && persisted.is_empty() {
+                eprintlf!("  No background tasks.");
+            } else {
+                if !tasks.is_empty() {
+                    eprintlf!("\r\n  Active background tasks:");
+                    for t in &tasks {
+                        let status_icon = match t.status {
+                            venus_core::background::BackgroundTaskStatus::Running => "◉",
+                            venus_core::background::BackgroundTaskStatus::Completed => "●",
+                            venus_core::background::BackgroundTaskStatus::Failed(_) => "✗",
+                            venus_core::background::BackgroundTaskStatus::Cancelled => "◌",
+                        };
+                        eprintlf!("    {} {} - {}", status_icon, t.id, t.description);
+                    }
+                }
+                // Show persisted tasks that aren't in the active list
+                let active_ids: Vec<&str> = tasks.iter().map(|t| t.id.as_str()).collect();
+                let historical: Vec<_> = persisted.iter()
+                    .filter(|t| !active_ids.contains(&t.id.as_str()))
+                    .collect();
+                if !historical.is_empty() {
+                    eprintlf!("\r\n  Historical tasks:");
+                    for t in historical.iter().take(10) {
+                        let status_icon = match t.status {
+                            venus_core::background::BackgroundTaskStatus::Running => "◉",
+                            venus_core::background::BackgroundTaskStatus::Completed => "●",
+                            venus_core::background::BackgroundTaskStatus::Failed(_) => "✗",
+                            venus_core::background::BackgroundTaskStatus::Cancelled => "◌",
+                        };
+                        eprintlf!("    {} {} - {}", status_icon, t.id, t.description);
+                    }
+                }
+                eprintlf!("\r\n  Use /attach <id> to view output, /kill <id> to stop.");
+                eprintlf!();
+            }
+            CommandResult::Continue
+        }
+        "/attach" => {
+            if let Some(id) = parts.get(1).map(|s| s.trim()) {
+                // Try in-memory first
+                match engine.background_runtime.read_output(id).await {
+                    Ok((info, output)) => {
+                        eprintlf!("\r\n  Task: {} - {}", info.id, info.description);
+                        eprintlf!("  Status: {:?}", info.status);
+                        eprintlf!("  Output:");
+                        for line in output.lines() {
+                            eprintlf!("    {}", line);
+                        }
+                        eprintlf!();
+                    }
+                    Err(_) => {
+                        // Fall back to persisted tasks on disk
+                        match venus_core::background::BackgroundTaskRuntime::load_from_disk().await {
+                            Ok(tasks) => {
+                                if let Some(info) = tasks.iter().find(|t| t.id == id || id.starts_with(&t.id)) {
+                                    eprintlf!("\r\n  Task: {} - {}", info.id, info.description);
+                                    eprintlf!("  Status: {:?}", info.status);
+                                    if let Some(ref output) = info.output {
+                                        eprintlf!("  Output:");
+                                        for line in output.lines() {
+                                            eprintlf!("    {}", line);
+                                        }
+                                    } else {
+                                        eprintlf!("  No output recorded.");
+                                    }
+                                    eprintlf!();
+                                } else {
+                                    eprintlf!("  Task '{}' not found.", id);
+                                }
+                            }
+                            Err(e) => eprintlf!("  Error loading tasks: {}", e),
+                        }
+                    }
+                }
+            } else {
+                eprintlf!("  Usage: /attach <task-id>");
+            }
+            CommandResult::Continue
+        }
+        "/kill" => {
+            if let Some(id) = parts.get(1).map(|s| s.trim()) {
+                match engine.background_runtime.cancel(id).await {
+                    Ok(true) => eprintlf!("  Task {} cancelled.", id),
+                    Ok(false) => eprintlf!("  Task {} not found or already finished.", id),
+                    Err(e) => eprintlf!("  Error: {}", e),
+                }
+            } else {
+                eprintlf!("  Usage: /kill <task-id>");
+            }
+            CommandResult::Continue
+        }
+        "/stats" => {
+            let uptime = chrono::Utc::now().timestamp() as u64 - engine.created_at;
+            let msg_count = engine.messages.lock().await.len();
+            let cost = engine.cost_tracker.lock().unwrap().format_cost();
+            let tokens = engine.cost_tracker.lock().unwrap().format_tokens();
+            let tool_count = engine.tools.all().len();
+            eprintlf!("\r\n  Statistics:");
+            eprintlf!("    Uptime:        {}s", uptime);
+            eprintlf!("    Messages:      {}", msg_count);
+            eprintlf!("    Tools:         {}", tool_count);
+            eprintlf!("    Cost:          {}", cost);
+            eprintlf!("    Tokens:        {}", tokens);
+            eprintlf!("    Model:         {}", engine.model);
+            eprintlf!("    Max turns:     {}", engine.max_turns);
+            if let Some(budget) = engine.budget_usd {
+                eprintlf!("    Budget:        ${:.2}", budget);
+            }
+            eprintlf!();
+            CommandResult::Continue
+        }
+        "/agents" => {
+            let tasks = engine.task_store.list();
+            let bg_tasks = engine.background_runtime.list().await;
+            if tasks.is_empty() && bg_tasks.is_empty() {
+                eprintlf!("  No active agents or background tasks.");
+            } else {
+                if !tasks.is_empty() {
+                    eprintlf!("\r\n  Tasks:");
+                    for t in &tasks {
+                        let status_icon = match t.status {
+                            venus_core::task::TaskStatus::Pending => "○",
+                            venus_core::task::TaskStatus::InProgress => "◉",
+                            venus_core::task::TaskStatus::Completed => "●",
+                            venus_core::task::TaskStatus::Deleted => "◌",
+                        };
+                        eprintlf!("    {} {} - {}", status_icon, t.id, t.subject);
+                    }
+                }
+                if !bg_tasks.is_empty() {
+                    eprintlf!("\r\n  Background tasks:");
+                    for t in &bg_tasks {
+                        eprintlf!("    {} - {}", t.id, t.description);
+                    }
+                }
+                eprintlf!();
+            }
+            CommandResult::Continue
+        }
+        "/add-dir" => {
+            if let Some(dir) = parts.get(1).map(|s| s.trim()) {
+                let path = std::path::PathBuf::from(dir);
+                if path.is_dir() {
+                    engine.additional_working_dirs.push(path.clone());
+                    eprintlf!("  Added directory: {}", path.display());
+                } else {
+                    eprintlf!("  Not a directory: {}", dir);
+                }
+            } else if engine.additional_working_dirs.is_empty() {
+                eprintlf!("  No additional directories. Usage: /add-dir <path>");
+            } else {
+                eprintlf!("  Additional directories:");
+                for dir in &engine.additional_working_dirs {
+                    eprintlf!("    {}", dir.display());
+                }
+            }
+            CommandResult::Continue
+        }
+        "/output-style" => {
+            let style = parts.get(1).map(|s| s.trim());
+            match style {
+                Some("default") | Some("explanatory") | Some("learning") => {
+                    let prompt = match style.unwrap() {
+                        "explanatory" => "\n\n# Output Style: Explanatory\nExplain your implementation choices. After each code change, add an 'Insight' block explaining why you made those specific decisions. Help the user understand the reasoning behind the approach.",
+                        "learning" => "\n\n# Output Style: Learning\nTeach as you go. After explaining a concept, pause and ask the user to try writing the code themselves before you provide the solution. Use a hands-on teaching approach.",
+                        _ => "",
+                    };
+                    if !prompt.is_empty() {
+                        engine.system_prompt.push_str(prompt);
+                        eprintlf!("  Output style set to: {}", style.unwrap());
+                    }
+                }
+                Some(other) => {
+                    eprintlf!("  Unknown style: {}. Use: default, explanatory, learning", other);
+                }
+                None => {
+                    eprintlf!("  Usage: /output-style <default|explanatory|learning>");
+                    eprintlf!("  Current styles inject additional instructions into the system prompt.");
+                }
+            }
+            CommandResult::Continue
+        }
+        "/branch" => {
+            // Show git branch info
+            match tokio::process::Command::new("git")
+                .args(["branch", "-v", "--no-color"])
+                .current_dir(&engine.working_dir)
+                .output()
+                .await
+            {
+                Ok(output) if output.status.success() => {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    eprintlf!("\r\n  Branches:");
+                    for line in stdout.lines() {
+                        eprintlf!("    {}", line);
+                    }
+                    eprintlf!();
+                }
+                _ => eprintlf!("  Not a git repository or git not available."),
+            }
+            CommandResult::Continue
+        }
+        "/btw" => {
+            // Quick note - inject as context message
+            let note = parts.get(1).map(|s| s.trim()).unwrap_or("");
+            if note.is_empty() {
+                eprintlf!("  Usage: /btw <note> - Add a quick note to the conversation");
+            } else {
+                eprintlf!("  Noted: {}", note);
+            }
+            CommandResult::Continue
+        }
+        "/tag" => {
+            // Show or create git tags
+            match tokio::process::Command::new("git")
+                .args(["tag", "-l", "--sort=-creatordate"])
+                .current_dir(&engine.working_dir)
+                .output()
+                .await
+            {
+                Ok(output) if output.status.success() => {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let tags: Vec<&str> = stdout.lines().collect();
+                    if tags.is_empty() {
+                        eprintlf!("  No tags found.");
+                    } else {
+                        eprintlf!("\r\n  Tags (recent first):");
+                        for t in tags.iter().take(20) {
+                            eprintlf!("    {}", t);
+                        }
+                        if tags.len() > 20 {
+                            eprintlf!("    ... and {} more", tags.len() - 20);
+                        }
+                    }
+                    eprintlf!();
+                }
+                _ => eprintlf!("  Not a git repository or git not available."),
+            }
+            CommandResult::Continue
+        }
+        "/fast" => {
+            // Toggle between a fast model and the configured model
+            let fast_model = "claude-haiku-4-5-20251001";
+            if engine.model == fast_model {
+                // Restore original model from settings
+                let original = engine.settings.effective_model().to_string();
+                engine.model = original.clone();
+                eprintlf!("  Switched to full model: {}", original);
+            } else {
+                engine.model = fast_model.to_string();
+                eprintlf!("  Switched to fast model: {}", fast_model);
+            }
+            CommandResult::Continue
+        }
+        "/rename" | "/rename-session" => {
+            let name = parts.get(1).map(|s| s.trim().to_string());
+            if let Some(name) = name {
+                engine.session_name = Some(name.clone());
+                eprintlf!("  Session renamed to: {}", name);
+            } else {
+                engine.session_name = None;
+                eprintlf!("  Session name cleared.");
+            }
+            CommandResult::Continue
+        }
+        "/hooks" => {
+            if let Some(ref hooks) = engine.settings.hooks {
+                if hooks.entries.is_empty() {
+                    eprintlf!("  No hooks configured.");
+                } else {
+                    eprintlf!("\r\n  Configured hooks:");
+                    for (event, hook_list) in &hooks.entries {
+                        for entry in hook_list {
+                            let matcher = entry.matcher.as_deref().unwrap_or("*");
+                            for hook in &entry.hooks {
+                                eprintlf!(
+                                    "    {} ({}) -> {}",
+                                    event, matcher, hook.command
+                                );
+                            }
+                        }
+                    }
+                    eprintlf!();
+                }
+            } else {
+                eprintlf!("  No hooks configured.");
+            }
+            CommandResult::Continue
+        }
+        "/delete-session" => {
+            let arg = parts.get(1).map(|s| s.trim().to_string());
+            if let Some(arg) = arg {
+                // Try to parse as number (session list index) or use as ID prefix
+                let rt = tokio::runtime::Handle::current();
+                let sessions = std::thread::spawn({
+                    let rt = rt.clone();
+                    move || rt.block_on(session::list_sessions())
+                })
+                .join()
+                .unwrap_or_else(|_| Ok(Vec::new()));
+
+                match sessions {
+                    Ok(sessions) => {
+                        let session_id = if let Ok(idx) = arg.parse::<usize>() {
+                            if idx == 0 || idx > sessions.len() {
+                                eprintlf!("  Invalid session number. Use 1-{}.", sessions.len());
+                                return CommandResult::Continue;
+                            }
+                            sessions[idx - 1].id.clone()
+                        } else {
+                            match sessions.iter().find(|s| s.id.starts_with(&arg)) {
+                                Some(s) => s.id.clone(),
+                                None => {
+                                    eprintlf!("  No session found matching '{}'.", arg);
+                                    return CommandResult::Continue;
+                                }
+                            }
+                        };
+
+                        match std::thread::spawn({
+                            let rt = rt.clone();
+                            let sid = session_id.clone();
+                            move || rt.block_on(session::delete_session(&sid))
+                        })
+                        .join()
+                        .unwrap_or_else(|_| Err(anyhow::anyhow!("thread panic")))
+                        {
+                            Ok(()) => eprintlf!("  Deleted session {}.", &session_id[..8.min(session_id.len())]),
+                            Err(e) => eprintlf!("  Error deleting session: {}", e),
+                        }
+                    }
+                    Err(e) => eprintlf!("  Error listing sessions: {}", e),
+                }
+            } else {
+                eprintlf!("  Usage: /delete-session <number|id-prefix>");
+            }
+            CommandResult::Continue
+        }
         _ => {
             // Check if it matches a user-invocable skill
             let skill_name = &cmd[1..]; // strip leading /
@@ -506,6 +1019,26 @@ pub async fn handle_command(
                     skill.content.clone()
                 };
                 return CommandResult::InjectMessage(content);
+            }
+
+            // Check plugin commands
+            if let Some(registry) = plugin_registry {
+                let cmd_name = &cmd[1..]; // strip leading /
+                for plugin in registry.all_plugins() {
+                    for cmd_def in &plugin.manifest.commands {
+                        if cmd_def.name == cmd_name {
+                            if let Some(ref prompt) = cmd_def.prompt {
+                                eprintlf!("  Invoking plugin command: {}", cmd_def.name);
+                                let content = if let Some(args) = parts.get(1) {
+                                    format!("{}\n\nArguments: {}", prompt, args)
+                                } else {
+                                    prompt.clone()
+                                };
+                                return CommandResult::InjectMessage(content);
+                            }
+                        }
+                    }
+                }
             }
 
             eprintlf!("  Unknown command: {}", cmd);
@@ -634,6 +1167,8 @@ async fn handle_config(engine: &QueryEngine) {
     eprintlf!("    Base URL:          {}", engine.base_url);
     eprintlf!("    Working dir:       {}", engine.working_dir.display());
     eprintlf!("    Permission mode:   {}", permission_mode);
+    eprintlf!("    Prompt color:      {}", engine.prompt_color);
+    eprintlf!("    Theme:             {}", engine.theme);
     eprintlf!("    Max tokens:        {}", engine.max_tokens);
     eprintlf!("    Max turns:         {}", engine.max_turns);
     if let Some(budget) = engine.budget_usd {
@@ -888,6 +1423,25 @@ fn print_help() {
 \r\n    /rewind [n]     Rewind n message pairs\
 \r\n    /permissions    Show permission rules\
 \r\n    /mcp            Show MCP server config\
+\r\n    /files          List tracked project files\
+\r\n    /keybindings    Show keyboard shortcuts\
+\r\n    /color <name>   Set prompt color\
+\r\n    /theme <name>   Set terminal theme\
+\r\n    /sandbox-toggle Toggle sandbox mode\
+\r\n    /stats          Show statistics\
+\r\n    /agents         List active agents/tasks\
+\r\n    /ps             List background tasks\
+\r\n    /attach <id>    View background task output\
+\r\n    /kill <id>      Stop background task\
+\r\n    /output-style   Set output style (default/explanatory/learning)\
+\r\n    /branch         Show git branches\
+\r\n    /btw <note>     Add a quick note\
+\r\n    /tag            Show git tags\
+\r\n    /add-dir [path] Add working directory context\
+\r\n    /fast           Toggle fast model mode\
+\r\n    /rename [name]  Rename current session\
+\r\n    /hooks          Show configured hooks\
+\r\n    /delete-session Delete a saved session\
 \r\n\
 \r\n  Keyboard:\
 \r\n    Ctrl+C          Abort current query\

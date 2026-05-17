@@ -6,6 +6,7 @@ use tracing::{debug, info};
 
 use crate::background::BackgroundTaskRuntime;
 use crate::engine::QueryEngine;
+use crate::hooks::events::HookEvent;
 use crate::hooks::HookRunner;
 use crate::message::ContentBlock;
 use crate::task::TaskStore;
@@ -52,6 +53,14 @@ impl SubAgent {
             "spawning sub-agent"
         );
 
+        // Fire SubagentStart hook
+        let subagent_session = uuid::Uuid::new_v4().to_string();
+        let hook_runner = config.hook_runner.clone();
+        hook_runner.run_simple_event(HookEvent::SubagentStart {
+            session_id: subagent_session.clone(),
+            description: config.description.clone(),
+        }).await;
+
         let model = config
             .model
             .unwrap_or_else(|| config.settings.effective_model().to_string());
@@ -93,6 +102,11 @@ impl SubAgent {
             iterations = messages.len(),
             "sub-agent completed"
         );
+
+        // Fire SubagentStop hook
+        hook_runner.run_simple_event(HookEvent::SubagentStop {
+            session_id: subagent_session,
+        }).await;
 
         Ok(SubAgentResult {
             output,

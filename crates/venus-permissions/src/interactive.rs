@@ -18,11 +18,9 @@ const READ_ONLY_TOOLS: &[&str] = &["Read", "Glob", "Grep"];
 /// Interactive permission handler that evaluates deny/allow rules,
 /// checks permission mode, and falls back to terminal prompting.
 pub struct InteractivePermissionHandler {
-    #[allow(dead_code)]
     settings: Arc<Settings>,
     deny_rules: Vec<ParsedRule>,
     allow_rules: Vec<ParsedRule>,
-    mode: PermissionMode,
 }
 
 impl InteractivePermissionHandler {
@@ -37,15 +35,9 @@ impl InteractivePermissionHandler {
             .as_ref()
             .map(|rules| rules.iter().map(rule_parser::parse_rule).collect())
             .unwrap_or_default();
-        let mode = settings
-            .permission_mode
-            .as_deref()
-            .map(PermissionMode::from_str)
-            .unwrap_or(PermissionMode::Default);
 
         debug!(
-            "permission handler: mode={:?}, {} deny rules, {} allow rules",
-            mode,
+            "permission handler: {} deny rules, {} allow rules",
             deny_rules.len(),
             allow_rules.len()
         );
@@ -54,7 +46,6 @@ impl InteractivePermissionHandler {
             settings,
             deny_rules,
             allow_rules,
-            mode,
         }
     }
 }
@@ -98,8 +89,13 @@ impl PermissionHandler for InteractivePermissionHandler {
             }
         }
 
-        // 5. Permission mode
-        match self.mode {
+        // 5. Permission mode (read dynamically to support runtime mode cycling)
+        let mode = self.settings
+            .permission_mode
+            .as_deref()
+            .map(PermissionMode::from_str)
+            .unwrap_or(PermissionMode::Default);
+        match mode {
             PermissionMode::Bypass => {
                 debug!("permission allowed by bypass mode");
                 PermissionDecision::Allow

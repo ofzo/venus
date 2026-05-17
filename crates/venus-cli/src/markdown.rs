@@ -110,6 +110,7 @@ pub struct MarkdownRenderer {
     code_buf: String,
     syntax_set: SyntaxSet,
     theme: Theme,
+    dark_mode: bool,
     term_width: usize,
     thinking_buf: String,
     was_thinking: bool,
@@ -117,11 +118,24 @@ pub struct MarkdownRenderer {
 
 impl MarkdownRenderer {
     pub fn new() -> Self {
+        Self::new_with_theme("dark")
+    }
+
+    pub fn new_with_theme(theme_name: &str) -> Self {
         let syntax_set = SyntaxSet::load_defaults_newlines();
-        let theme = ThemeSet::load_defaults()
-            .themes
-            .remove("base16-ocean.dark")
-            .unwrap_or_else(|| ThemeSet::load_defaults().themes.into_values().next().unwrap());
+        let dark_mode = theme_name != "light";
+        let theme = if dark_mode {
+            ThemeSet::load_defaults()
+                .themes
+                .remove("base16-ocean.dark")
+                .unwrap_or_else(|| ThemeSet::load_defaults().themes.into_values().next().unwrap())
+        } else {
+            ThemeSet::load_defaults()
+                .themes
+                .remove("InspiredGitHub")
+                .or_else(|| ThemeSet::load_defaults().themes.remove("base16-ocean.light"))
+                .unwrap_or_else(|| ThemeSet::load_defaults().themes.into_values().next().unwrap())
+        };
 
         Self {
             line_buf: String::new(),
@@ -130,6 +144,7 @@ impl MarkdownRenderer {
             code_buf: String::new(),
             syntax_set,
             theme,
+            dark_mode,
             term_width: terminal_width(),
             thinking_buf: String::new(),
             was_thinking: false,

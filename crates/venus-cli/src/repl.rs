@@ -27,8 +27,14 @@ use crate::commands::{self, CommandResult};
 use crate::input;
 use crate::markdown::MarkdownRenderer;
 use crate::render;
+use crate::render::OutputFormat;
 
-pub async fn run_repl(engine: &mut QueryEngine, skill_registry: Option<Arc<SkillRegistry>>) -> Result<()> {
+pub async fn run_repl(
+    engine: &mut QueryEngine,
+    skill_registry: Option<Arc<SkillRegistry>>,
+    output_format: OutputFormat,
+    plugin_registry: Option<venus_core::plugin_registry::PluginRegistry>,
+) -> Result<()> {
     // Create cron channel and scheduler
     let (cron_tx, mut cron_rx) = mpsc::unbounded_channel::<String>();
 
@@ -52,10 +58,17 @@ pub async fn run_repl(engine: &mut QueryEngine, skill_registry: Option<Arc<Skill
     // Move input reading to a dedicated thread
     let (input_tx, mut input_rx) = mpsc::unbounded_channel::<Option<String>>();
     let (vim_tx, mut vim_rx) = mpsc::unbounded_channel::<bool>();
+    let (status_tx, mut status_rx) = mpsc::unbounded_channel::<String>();
+
+    // Build initial status string
+    let initial_status = build_status(engine);
+    status_tx.send(initial_status).ok();
 
     let history_path = input::default_history_path();
+    let prompt_color = engine.prompt_color.clone();
     std::thread::spawn(move || {
-        let mut editor = input::InputEditor::new(history_path);
+        let mut editor = input::InputEditor::new(history_path, &prompt_color);
+        let mut current_status = String::new();
         loop {
             // Check for vim toggle signals (non-blocking)
             if let Ok(toggle) = vim_rx.try_recv() {
@@ -63,7 +76,11 @@ pub async fn run_repl(engine: &mut QueryEngine, skill_registry: Option<Arc<Skill
                     editor.toggle_vim_mode();
                 }
             }
-            match editor.read_line() {
+            // Check for status updates (non-blocking)
+            while let Ok(status) = status_rx.try_recv() {
+                current_status = status;
+            }
+            match editor.read_line_with_status(&current_status) {
                 Some(line) => {
                     if input_tx.send(Some(line)).is_err() {
                         break;
@@ -88,12 +105,32 @@ pub async fn run_repl(engine: &mut QueryEngine, skill_registry: Option<Arc<Skill
                             continue;
                         }
 
+                        // Shift+Tab: cycle permission mode
+                        if line == input::InputEditor::PERM_CYCLE_SENTINEL {
+                            let current = engine.settings.permission_mode.as_deref().unwrap_or("default");
+                            let next = match current {
+                                "default" => "auto",
+                                "auto" => "bypass",
+                                _ => "default",
+                            };
+                            engine.settings = Arc::new({
+                                let mut s = (*engine.settings).clone();
+                                s.permission_mode = Some(next.to_string());
+                                s
+                            });
+                            eprintlf!("  Permission mode: {}", next);
+                            continue;
+                        }
+
                         if line.starts_with('/') {
-                            match commands::handle_command(&line, engine, skill_registry.as_ref()).await {
+                            match commands::handle_command(&line, engine, skill_registry.as_ref(), plugin_registry.as_ref()).await {
                                 CommandResult::Exit => break,
                                 CommandResult::InjectMessage(msg) => {
-                                    match submit_and_render(engine, &msg).await {
-                                        Ok(_) => save_current_session(engine).await,
+                                    match submit_and_render(engine, &msg, &output_format).await {
+                                        Ok(_) => {
+                                            save_current_session(engine).await;
+                                            status_tx.send(build_status(engine)).ok();
+                                        }
                                         Err(e) => eprintlf!("\x1b[31mError: {}\x1b[0m", e),
                                     }
                                 }
@@ -106,9 +143,10 @@ pub async fn run_repl(engine: &mut QueryEngine, skill_registry: Option<Arc<Skill
                             continue;
                         }
 
-                        match submit_and_render(engine, &line).await {
+                        match submit_and_render(engine, &line, &output_format).await {
                             Ok(_) => {
                                 save_current_session(engine).await;
+                                status_tx.send(build_status(engine)).ok();
                             }
                             Err(e) => {
                                 eprintlf!("\x1b[31mError: {}\x1b[0m", e);
@@ -124,10 +162,11 @@ pub async fn run_repl(engine: &mut QueryEngine, skill_registry: Option<Arc<Skill
             }
             Some(cron_prompt) = cron_rx.recv() => {
                 eprintlf!("\r\n  [cron] Executing scheduled prompt...");
-                if let Err(e) = submit_and_render(engine, &cron_prompt).await {
+                if let Err(e) = submit_and_render(engine, &cron_prompt, &output_format).await {
                     eprintlf!("\x1b[31mCron error: {}\x1b[0m", e);
                 }
                 save_current_session(engine).await;
+                status_tx.send(build_status(engine)).ok();
             }
         }
     }
@@ -143,11 +182,11 @@ pub async fn run_repl(engine: &mut QueryEngine, skill_registry: Option<Arc<Skill
     Ok(())
 }
 
-pub async fn run_single_prompt(engine: &QueryEngine, prompt: &str) -> Result<()> {
-    submit_and_render(engine, prompt).await
+pub async fn run_single_prompt(engine: &QueryEngine, prompt: &str, output_format: &OutputFormat) -> Result<()> {
+    submit_and_render(engine, prompt, output_format).await
 }
 
-async fn submit_and_render(engine: &QueryEngine, input: &str) -> Result<()> {
+async fn submit_and_render(engine: &QueryEngine, input: &str, output_format: &OutputFormat) -> Result<()> {
     // Run UserPromptSubmit hooks
     let effective_input;
     if let Ok(resp) = engine.hook_runner.run_user_prompt_submit(input).await {
@@ -176,11 +215,31 @@ async fn submit_and_render(engine: &QueryEngine, input: &str) -> Result<()> {
     let mut rx = engine.submit_message(content).await?;
 
     // Create a markdown renderer for this response
-    let mut md = MarkdownRenderer::new();
+    let mut md = MarkdownRenderer::new_with_theme(&engine.theme);
+    let mut render_state = render::RenderState::new();
+    if matches!(output_format, OutputFormat::Text) {
+        render_state.show_thinking();
+    }
+    let mut json_collector = match output_format {
+        OutputFormat::Json => Some(render::JsonCollector::new()),
+        _ => None,
+    };
 
     // Drain all events from the streaming receiver
     while let Some(event) = rx.recv().await {
-        render::render_event(&event, &mut md);
+        match output_format {
+            OutputFormat::Text => render::render_event(&event, &mut md, &mut render_state),
+            OutputFormat::StreamJson => render::render_event_ndjson(&event),
+            OutputFormat::Json => {
+                if let Some(ref mut collector) = json_collector {
+                    collector.push(&event);
+                }
+            }
+        }
+    }
+
+    if let Some(collector) = json_collector {
+        collector.finish();
     }
 
     Ok(())
@@ -196,6 +255,7 @@ async fn save_current_session(engine: &QueryEngine) {
         updated_at: now,
         message_count: messages.len(),
         model: engine.model.clone(),
+        name: engine.session_name.clone(),
     };
     let msg_values: Vec<serde_json::Value> = messages
         .iter()
@@ -204,5 +264,14 @@ async fn save_current_session(engine: &QueryEngine) {
     drop(messages);
     if let Err(e) = session::save_session(&engine.session_id, &meta, &msg_values).await {
         tracing::warn!("failed to save session: {}", e);
+    }
+}
+
+fn build_status(engine: &QueryEngine) -> String {
+    let cost = engine.cost_tracker.lock().unwrap().format_cost();
+    if cost == "$0.00" {
+        engine.model.clone()
+    } else {
+        format!("{} | {}", engine.model, cost)
     }
 }

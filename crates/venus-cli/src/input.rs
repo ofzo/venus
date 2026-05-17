@@ -42,18 +42,51 @@ const SLASH_COMMANDS: &[&str] = &[
     "/permissions",
     "/mcp",
     "/plugin",
+    "/rename",
+    "/hooks",
+    "/delete-session",
+    "/add-dir",
+    "/fast",
+    "/files",
+    "/keybindings",
+    "/color",
+    "/theme",
+    "/sandbox-toggle",
+    "/stats",
+    "/agents",
+    "/output-style",
+    "/branch",
+    "/btw",
+    "/tag",
+    "/ps",
+    "/attach",
+    "/kill",
 ];
+
+/// Map color name to ANSI escape code.
+fn color_ansi(name: &str) -> &str {
+    match name {
+        "blue" => "\x1b[34m",
+        "green" => "\x1b[32m",
+        "red" => "\x1b[31m",
+        "yellow" => "\x1b[33m",
+        "cyan" => "\x1b[36m",
+        "magenta" => "\x1b[35m",
+        "white" => "\x1b[37m",
+        _ => "\x1b[36m", // default cyan
+    }
+}
 
 /// A REPL input handler backed by reedline.
 pub struct InputEditor {
     editor: Reedline,
-    prompt: DefaultPrompt,
+    prompt_color: String,
     vim_mode: bool,
     history_path: Option<PathBuf>,
 }
 
 impl InputEditor {
-    pub fn new(history_path: Option<PathBuf>) -> Self {
+    pub fn new(history_path: Option<PathBuf>, prompt_color: &str) -> Self {
         let history = history_path
             .clone()
             .and_then(|p| {
@@ -88,6 +121,12 @@ impl InputEditor {
             KeyCode::Enter,
             ReedlineEvent::Edit(vec![EditCommand::InsertNewline]),
         );
+        // Shift+Tab for permission mode cycling
+        keybindings.add_binding(
+            KeyModifiers::SHIFT,
+            KeyCode::Tab,
+            ReedlineEvent::Edit(vec![EditCommand::InsertString("\x00PERM_CYCLE\x00".to_string())]),
+        );
 
         let edit_mode = Box::new(Emacs::new(keybindings));
 
@@ -100,19 +139,14 @@ impl InputEditor {
             editor = editor.with_history(Box::new(history));
         }
 
-        let prompt = DefaultPrompt::new(
-            DefaultPromptSegment::Basic(">".to_string()),
-            DefaultPromptSegment::Empty,
-        );
-
-        Self { editor, prompt, vim_mode: false, history_path }
+        Self { editor, prompt_color: prompt_color.to_string(), vim_mode: false, history_path }
     }
 
     /// Toggle between Emacs and Vi edit modes.
     pub fn toggle_vim_mode(&mut self) -> bool {
         self.vim_mode = !self.vim_mode;
         // Rebuild the editor with the new edit mode
-        *self = InputEditor::new(self.history_path.clone());
+        *self = InputEditor::new(self.history_path.clone(), &self.prompt_color);
         self.vim_mode = !self.vim_mode; // set to desired state
         // If vim was just toggled ON, rebuild again with vim
         if self.vim_mode {
@@ -122,7 +156,13 @@ impl InputEditor {
                     .with_name("completion_menu")
                     .with_columns(4),
             );
-            let insert_keybindings = default_vi_insert_keybindings();
+            let mut insert_keybindings = default_vi_insert_keybindings();
+            // Shift+Tab for permission mode cycling (vi insert mode)
+            insert_keybindings.add_binding(
+                KeyModifiers::SHIFT,
+                KeyCode::Tab,
+                ReedlineEvent::Edit(vec![EditCommand::InsertString("\x00PERM_CYCLE\x00".to_string())]),
+            );
             let normal_keybindings = default_vi_normal_keybindings();
             let edit_mode = Box::new(Vi::new(insert_keybindings, normal_keybindings));
 
@@ -149,10 +189,36 @@ impl InputEditor {
         self.vim_mode
     }
 
-    /// Read a line of input. Returns None on Ctrl+D (EOF).
+    /// Sentinel string returned when Shift+Tab is pressed (permission mode cycle).
+    pub const PERM_CYCLE_SENTINEL: &str = "\x00PERM_CYCLE\x00";
+
+    /// Read a line of input with no status. Returns None on Ctrl+D (EOF).
     pub fn read_line(&mut self) -> Option<String> {
-        match self.editor.read_line(&self.prompt) {
+        self.read_line_with_status("")
+    }
+
+    /// Read a line of input. Returns None on Ctrl+D (EOF).
+    /// `right_status` is displayed in the right prompt (e.g., model, cost).
+    pub fn read_line_with_status(&mut self, right_status: &str) -> Option<String> {
+        let color = color_ansi(&self.prompt_color);
+        let prompt_str = format!("{}>\x1b[0m", color);
+        let prompt = if right_status.is_empty() {
+            DefaultPrompt::new(
+                DefaultPromptSegment::Basic(prompt_str),
+                DefaultPromptSegment::Empty,
+            )
+        } else {
+            DefaultPrompt::new(
+                DefaultPromptSegment::Basic(prompt_str),
+                DefaultPromptSegment::Basic(right_status.to_string()),
+            )
+        };
+        match self.editor.read_line(&prompt) {
             Ok(Signal::Success(line)) => {
+                // Check for Shift+Tab permission cycle sentinel
+                if line.contains(Self::PERM_CYCLE_SENTINEL) {
+                    return Some(Self::PERM_CYCLE_SENTINEL.to_string());
+                }
                 let trimmed = line.trim().to_string();
                 if trimmed.is_empty() {
                     Some(String::new())

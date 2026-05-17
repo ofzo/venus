@@ -10,6 +10,32 @@ impl ToolRegistry {
         Self { tools }
     }
 
+    /// Create a registry filtered by allowed/disallowed tool lists.
+    /// `allowed`: if Some, only tools whose names are in this list are kept.
+    /// `disallowed`: tools whose names are in this list are removed.
+    pub fn new_filtered(
+        tools: Vec<Box<dyn Tool>>,
+        allowed: Option<&[String]>,
+        disallowed: Option<&[String]>,
+    ) -> Self {
+        let filtered: Vec<Box<dyn Tool>> = tools
+            .into_iter()
+            .filter(|t| {
+                let name = t.name();
+                if let Some(dis) = disallowed {
+                    if dis.iter().any(|d| d == name) {
+                        return false;
+                    }
+                }
+                if let Some(al) = allowed {
+                    return al.iter().any(|a| a == name);
+                }
+                true
+            })
+            .collect();
+        Self { tools: filtered }
+    }
+
     pub fn find_by_name(&self, name: &str) -> Option<&dyn Tool> {
         self.tools.iter().find(|t| t.name() == name).map(|t| t.as_ref())
     }

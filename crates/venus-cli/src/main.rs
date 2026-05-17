@@ -32,14 +32,7 @@ use venus_core::task::TaskStore;
 use venus_core::tool_registry::ToolRegistry;
 use venus_permissions::interactive::InteractivePermissionHandler;
 use venus_utils::config::Settings;
-
-#[derive(clap::ValueEnum, Clone, Debug, Default)]
-enum OutputFormat {
-    #[default]
-    Text,
-    Json,
-    StreamJson,
-}
+use render::OutputFormat;
 
 #[derive(Parser, Debug)]
 #[command(name = "venus", about = "Venus - AI coding assistant")]
@@ -189,6 +182,26 @@ async fn main() -> Result<()> {
         });
     }
 
+    // --effort: map effort level to thinking budget
+    if let Some(ref effort) = cli.effort {
+        use venus_utils::config::ThinkingConfig;
+        let budget = match effort.as_str() {
+            "low" => Some(1024),
+            "medium" => Some(4096),
+            "high" => Some(10000),
+            "max" => Some(32000),
+            _ => None,
+        };
+        let existing_mode = settings
+            .thinking
+            .as_ref()
+            .and_then(|t| t.mode.clone());
+        settings.thinking = Some(ThinkingConfig {
+            mode: existing_mode.or_else(|| Some("enabled".to_string())),
+            budget_tokens: budget,
+        });
+    }
+
     // --permission-mode: override settings.permission_mode
     if let Some(ref mode) = cli.permission_mode {
         settings.permission_mode = Some(mode.clone());
@@ -197,6 +210,14 @@ async fn main() -> Result<()> {
     // --dangerously-skip-permissions: set permission_mode to bypass
     if cli.dangerously_skip_permissions {
         settings.permission_mode = Some("bypass".into());
+    }
+
+    // --allowed-tools / --disallowed-tools: override settings
+    if cli.allowed_tools.is_some() {
+        settings.allowed_tools = cli.allowed_tools;
+    }
+    if cli.disallowed_tools.is_some() {
+        settings.disallowed_tools = cli.disallowed_tools;
     }
 
     // --mcp-config: read and merge MCP config
@@ -274,7 +295,11 @@ async fn main() -> Result<()> {
         None
     };
 
-    let tools = Arc::new(ToolRegistry::new(all_tool_list));
+    let tools = Arc::new(ToolRegistry::new_filtered(
+        all_tool_list,
+        settings.allowed_tools.as_deref(),
+        settings.disallowed_tools.as_deref(),
+    ));
     let task_store = Arc::new(TaskStore::new());
     let background_runtime = Arc::new(BackgroundTaskRuntime::new());
     let hook_runner = Arc::new(HookRunner::new(
@@ -287,6 +312,9 @@ async fn main() -> Result<()> {
         QueryEngine::new(settings.clone(), tools, permissions, working_dir.clone(), task_store, background_runtime, hook_runner).await?;
 
     // CLI flag overrides (applied after settings-based engine init)
+    if let Some(ref name) = cli.name {
+        engine.session_name = Some(name.clone());
+    }
     if let Some(max_turns) = cli.max_turns {
         engine.max_turns = max_turns;
     }
@@ -386,12 +414,12 @@ async fn main() -> Result<()> {
 
     // Non-interactive mode
     if let Some(prompt) = cli.prompt {
-        repl::run_single_prompt(&engine, &prompt).await?;
+        repl::run_single_prompt(&engine, &prompt, &cli.output_format).await?;
         return Ok(());
     }
 
     // Interactive REPL
-    repl::run_repl(&mut engine, Some(skill_registry)).await
+    repl::run_repl(&mut engine, Some(skill_registry), cli.output_format, Some(plugin_registry)).await
 }
 
 async fn try_resume_by_prefix(
