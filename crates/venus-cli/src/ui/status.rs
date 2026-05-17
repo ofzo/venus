@@ -47,7 +47,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         parts.push(format!("({})", branch));
     }
 
-    let status_text = parts.join(" │ ");
+    let status_text = parts.join("  "); // gap=2 between parts
 
     // Claude Code uses dimColor for the entire status line
     let status_line = Line::from(Span::styled(

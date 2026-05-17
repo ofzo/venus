@@ -64,11 +64,19 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             Span::raw("  "),
         ];
         for (i, tab) in tab_state.tabs.iter().enumerate() {
-            if i > 0 { spans.push(Span::raw(" ")); }
+            if i > 0 { spans.push(Span::raw(" ")); } // gap=1
             if i == tab_state.selected_tab {
-                spans.push(Span::styled(format!(" {} ", tab), Style::default().add_modifier(Modifier::BOLD)));
+                // Current tab: inverse + bold (matching Claude Code's Tabs component)
+                spans.push(Span::styled(
+                    format!(" {} ", tab),
+                    Style::default()
+                        .fg(Color::Black) // inverse text color
+                        .bg(title_color)   // background = pane color
+                        .add_modifier(Modifier::BOLD),
+                ));
             } else {
-                spans.push(Span::styled(format!(" {} ", tab), Style::default().fg(Color::DarkGray)));
+                // Non-current tab: no special styling
+                spans.push(Span::styled(format!(" {} ", tab), Style::default()));
             }
         }
         frame.render_widget(Paragraph::new(Line::from(spans)), tab_area);

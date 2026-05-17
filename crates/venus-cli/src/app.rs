@@ -15,8 +15,9 @@ use crate::event::AppEvent;
 use crate::input_state::InputState;
 use venus_permissions::tui_handler::{PermissionRequest, PermissionResponse};
 
-/// Spinner frames matching Claude Code's Unicode characters.
-const SPINNER_FRAMES: &[&str] = &["·", "✂", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✂"];
+/// Spinner frames matching Claude Code's Unicode characters exactly.
+/// macOS: ['·', '✢', '✳', '✶', '✻', '✽'] forward + reverse = 12 frames
+const SPINNER_FRAMES: &[&str] = &["\u{00B7}", "\u{2722}", "\u{2733}", "\u{2736}", "\u{273B}", "\u{273D}", "\u{273B}", "\u{2736}", "\u{2733}", "\u{2722}", "\u{00B7}", "\u{00B7}"];
 
 /// Random verbs shown during spinner (matching Claude Code's behavior).
 const SPINNER_VERBS: &[&str] = &[
