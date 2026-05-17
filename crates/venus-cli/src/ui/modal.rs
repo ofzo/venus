@@ -3,11 +3,19 @@ use ratatui::{
     widgets::*,
 };
 
-/// Unicode figures matching Claude Code
-const POINTER: &str = "❯";
+/// Unicode figures
+const POINTER: &str = "\u{276F}";  // ❯
+const MIDDOT: &str = "\u{00B7}";   // ·
 
-/// Render a permission prompt matching Claude Code's Select component exactly.
-/// NO borders. Just a list with ❯ indicator.
+/// Render permission prompt matching Claude Code's PermissionPrompt exactly.
+///
+/// Layout:
+///   {question text}
+///   ❯ Option One  description
+///     Option Two  description
+///     Option Three  description
+///
+///   Esc to cancel · Tab to amend
 pub fn render(
     frame: &mut Frame,
     area: Rect,
@@ -15,99 +23,85 @@ pub fn render(
     description: &str,
     selected_option: usize,
 ) {
-    // Claude Code's PermissionPrompt layout:
-    // <Box flexDirection="column">
-    //   <Text>{questionText}</Text>
-    //   <Select options={options} .../>
-    //   <Box marginTop={1}>
-    //     <Text dimColor>Esc to cancel</Text>
-    //   </Box>
-    // </Box>
-
-    let content_width = (area.width * 60 / 100).min(60);
+    // Center the content
+    let content_width = area.width.min(70);
     let x = (area.width.saturating_sub(content_width)) / 2;
-    let y = (area.height.saturating_sub(10)) / 2;
+    let start_y = (area.height.saturating_sub(12)) / 2;
 
-    // Clear background
+    // Clear background area
+    let bg_area = Rect::new(x, start_y, content_width, 12);
     let bg = Block::default().style(Style::default().bg(Color::Black));
-    frame.render_widget(bg, Rect::new(x, y, content_width, 10));
+    frame.render_widget(bg, bg_area);
 
-    let mut current_y = y;
+    let content_x = x + 2; // paddingX=2
+    let inner_width = content_width.saturating_sub(4);
+    let mut current_y = start_y + 1;
 
-    // Question text (matching Claude Code's "Do you want to proceed?")
-    let question_area = Rect::new(x + 2, current_y, content_width.saturating_sub(4), 1);
+    // 1. Question text (default color, no special styling)
+    let question_area = Rect::new(content_x, current_y, inner_width, 1);
     frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            "Do you want to proceed?",
-            Style::default().add_modifier(Modifier::BOLD),
-        ))),
+        Paragraph::new(Line::from(Span::raw("Do you want to proceed?"))),
         question_area,
     );
     current_y += 1;
 
-    // Tool info
-    let tool_area = Rect::new(x + 2, current_y, content_width.saturating_sub(4), 1);
+    // 2. Tool info
+    let tool_area = Rect::new(content_x, current_y, inner_width, 1);
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled(
-                tool_name,
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-            ),
+            Span::styled(tool_name, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
             Span::raw("  "),
-            Span::styled(
-                description,
-                Style::default().fg(Color::DarkGray),
-            ),
+            Span::styled(description, Style::default().fg(Color::DarkGray)),
         ])),
         tool_area,
     );
     current_y += 2;
 
-    // Select options (matching Claude Code's Select component style)
+    // 3. Select options (compact layout, inlineDescriptions=true)
     let options = [
-        "Yes — allow this operation",
-        "Yes, and always allow",
-        "No",
+        ("Yes, proceed", "allow this operation"),
+        ("Yes, always allow", "skip future prompts for this tool"),
+        ("No", "deny this operation"),
     ];
 
-    for (i, option) in options.iter().enumerate() {
+    for (i, (label, desc)) in options.iter().enumerate() {
         let is_focused = i == selected_option;
-        let opt_area = Rect::new(x + 2, current_y, content_width.saturating_sub(4), 1);
+        let opt_area = Rect::new(content_x, current_y, inner_width, 1);
 
         let mut spans = Vec::new();
 
-        // Left indicator: ❯ for focused
+        // Indicator: ❯ for focused, space otherwise
         if is_focused {
-            spans.push(Span::styled(
-                POINTER,
-                Style::default().fg(Color::Cyan), // "suggestion" color
-            ));
+            spans.push(Span::styled(POINTER, Style::default().fg(Color::Cyan)));
         } else {
             spans.push(Span::raw(" "));
         }
 
-        // Gap
+        // Gap (1 space)
         spans.push(Span::raw(" "));
 
-        // Option text
-        let text_style = if is_focused {
-            Style::default().fg(Color::Cyan) // "suggestion" color
+        // Label text (suggestion color when focused)
+        if is_focused {
+            spans.push(Span::styled(label.to_string(), Style::default().fg(Color::Cyan)));
         } else {
-            Style::default()
-        };
-        spans.push(Span::styled(option.to_string(), text_style));
+            spans.push(Span::raw(label.to_string()));
+        }
+
+        // Inline description (inactive color, dimColor)
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(desc.to_string(), Style::default().fg(Color::DarkGray)));
 
         frame.render_widget(Paragraph::new(Line::from(spans)), opt_area);
         current_y += 1;
     }
 
-    current_y += 1;
+    current_y += 1; // marginTop=1
 
-    // Footer hint (matching Claude Code's dimColor style)
-    let hint_area = Rect::new(x + 2, current_y, content_width.saturating_sub(4), 1);
+    // 4. Footer: "Esc to cancel · Tab to amend"
+    let hint_area = Rect::new(content_x, current_y, inner_width, 1);
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            "Esc to cancel",
+            format!("Esc to cancel {} Tab to amend", MIDDOT),
             Style::default().fg(Color::DarkGray),
         ))),
         hint_area,

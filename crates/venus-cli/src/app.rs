@@ -1058,21 +1058,20 @@ impl App {
 
     /// Open the model picker overlay matching Claude Code's ModelPicker.
     fn open_model_picker(&mut self) {
-        let current_effort = self.get_effort_label();
         let models = vec![
             PickerItem {
                 label: "claude-opus-4-20250514".into(),
-                description: "Most capable, highest cost".into(),
+                description: "Most capable".into(),
                 value: "claude-opus-4-20250514".into(),
             },
             PickerItem {
                 label: "claude-sonnet-4-20250514".into(),
-                description: "Balanced capability and cost".into(),
+                description: "Balanced".into(),
                 value: "claude-sonnet-4-20250514".into(),
             },
             PickerItem {
                 label: "claude-haiku-4-5-20251001".into(),
-                description: "Fastest, lowest cost".into(),
+                description: "Fastest".into(),
                 value: "claude-haiku-4-5-20251001".into(),
             },
         ];
@@ -1082,8 +1081,7 @@ impl App {
             picker.selected = idx;
             picker.scroll_offset = idx.saturating_sub(picker.visible_count / 2);
         }
-        // Store effort info for display
-        picker.visible_count = 10; // Claude Code shows up to 10 items
+        picker.visible_count = 10;
         self.picker = Some(picker);
         self.input_mode = InputMode::Picker;
     }
