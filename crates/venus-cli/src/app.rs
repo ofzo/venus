@@ -800,7 +800,7 @@ impl App {
             message: "Thinking...".to_string(),
             active: true,
             started_at: Some(Instant::now()),
-            verb_index: self.tick_count as usize % SPINNER_VERBS.len(),
+            verb_index: (self.tick_count as usize + self.messages.len()) % SPINNER_VERBS.len(),
         };
         self.auto_scroll = true;
         self.scroll_offset = 0;
@@ -861,7 +861,7 @@ impl App {
             message: "Thinking...".to_string(),
             active: true,
             started_at: Some(Instant::now()),
-            verb_index: self.tick_count as usize % SPINNER_VERBS.len(),
+            verb_index: (self.tick_count as usize + self.messages.len()) % SPINNER_VERBS.len(),
         };
         self.auto_scroll = true;
         self.scroll_offset = 0;
@@ -1004,7 +1004,7 @@ impl App {
                     message: "Thinking...".to_string(),
                     active: true,
                     started_at: Some(Instant::now()),
-                    verb_index: self.tick_count as usize % SPINNER_VERBS.len(),
+                    verb_index: (self.tick_count as usize + self.messages.len()) % SPINNER_VERBS.len(),
                 };
             }
             crate::commands::CommandResult::ToggleVim => {
