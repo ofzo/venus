@@ -852,6 +852,10 @@ impl App {
                     return Ok(());
                 }
             }
+            "/diff" => {
+                self.open_diff_viewer().await;
+                return Ok(());
+            }
             _ => {}
         }
 
@@ -1231,6 +1235,78 @@ impl App {
         if let Some(idx) = picker.items.iter().position(|i| i.value == current) {
             picker.selected = idx;
         }
+        self.picker = Some(picker);
+        self.input_mode = InputMode::Picker;
+    }
+
+    /// Open the diff viewer as a picker.
+    async fn open_diff_viewer(&mut self) {
+        // Get staged and unstaged diffs
+        let staged = tokio::process::Command::new("git")
+            .args(["diff", "--staged"])
+            .current_dir(&self.engine.working_dir)
+            .output()
+            .await
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .unwrap_or_default();
+
+        let unstaged = tokio::process::Command::new("git")
+            .args(["diff"])
+            .current_dir(&self.engine.working_dir)
+            .output()
+            .await
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .unwrap_or_default();
+
+        let mut items = Vec::new();
+
+        if staged.is_empty() && unstaged.is_empty() {
+            self.messages.push(DisplayMessage::Status {
+                text: "No changes to show.".to_string(),
+            });
+            return;
+        }
+
+        // Add staged changes header and lines
+        if !staged.is_empty() {
+            items.push(PickerItem {
+                label: "── Staged Changes ──".into(),
+                description: String::new(),
+                value: String::new(),
+            });
+            for line in staged.lines().take(100) {
+                let (label, desc) = if line.starts_with("+++") || line.starts_with("---") {
+                    (line.to_string(), String::new())
+                } else if line.starts_with("+") {
+                    (line.to_string(), String::new())
+                } else if line.starts_with("-") {
+                    (line.to_string(), String::new())
+                } else if line.starts_with("@@") {
+                    (line.to_string(), String::new())
+                } else {
+                    (line.to_string(), String::new())
+                };
+                items.push(PickerItem { label, description: desc, value: String::new() });
+            }
+        }
+
+        // Add unstaged changes header and lines
+        if !unstaged.is_empty() {
+            items.push(PickerItem {
+                label: "── Unstaged Changes ──".into(),
+                description: String::new(),
+                value: String::new(),
+            });
+            for line in unstaged.lines().take(100) {
+                items.push(PickerItem {
+                    label: line.to_string(),
+                    description: String::new(),
+                    value: String::new(),
+                });
+            }
+        }
+
+        let picker = PickerState::new("Git Diff".into(), items, PickerSource::Help);
         self.picker = Some(picker);
         self.input_mode = InputMode::Picker;
     }
