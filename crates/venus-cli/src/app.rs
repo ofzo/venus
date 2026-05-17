@@ -52,6 +52,8 @@ pub enum PickerSource {
     Permissions,
     Effort,
     Skills(Vec<String>),
+    Config,
+    ConfigSub(String), // Config sub-picker for a specific setting
 }
 
 /// State for an active picker/list selection overlay.
@@ -843,6 +845,13 @@ impl App {
                 self.open_skills_picker();
                 return Ok(());
             }
+            "/config" | "/settings" => {
+                let parts: Vec<&str> = input.split_whitespace().collect();
+                if parts.get(1).is_none() {
+                    self.open_config_picker();
+                    return Ok(());
+                }
+            }
             _ => {}
         }
 
@@ -1101,6 +1110,131 @@ impl App {
         self.input_mode = InputMode::Picker;
     }
 
+    /// Open the config settings picker.
+    fn open_config_picker(&mut self) {
+        let perm_mode = self.engine.settings.permission_mode.as_deref().unwrap_or("default");
+        let thinking_mode = self.engine.settings.thinking.as_ref()
+            .and_then(|t| t.mode.as_deref())
+            .unwrap_or("disabled");
+        let effort = self.get_effort_label();
+
+        let items = vec![
+            PickerItem {
+                label: "Model".into(),
+                description: format!("Current: {}", self.engine.model),
+                value: "model".into(),
+            },
+            PickerItem {
+                label: "Theme".into(),
+                description: format!("Current: {}", self.engine.theme),
+                value: "theme".into(),
+            },
+            PickerItem {
+                label: "Permission Mode".into(),
+                description: format!("Current: {} (Shift+Tab to cycle)", perm_mode),
+                value: "permissions".into(),
+            },
+            PickerItem {
+                label: "Thinking Mode".into(),
+                description: format!("Current: {} (Alt+T to toggle)", thinking_mode),
+                value: "thinking".into(),
+            },
+            PickerItem {
+                label: "Effort Level".into(),
+                description: format!("Current: {}", effort),
+                value: "effort".into(),
+            },
+            PickerItem {
+                label: "Prompt Color".into(),
+                description: format!("Current: {}", self.engine.prompt_color),
+                value: "color".into(),
+            },
+        ];
+
+        let picker = PickerState::new("Settings".into(), items, PickerSource::Config);
+        self.picker = Some(picker);
+        self.input_mode = InputMode::Picker;
+    }
+
+    /// Open a config sub-picker for a specific setting.
+    fn open_config_sub_picker(&mut self, setting: &str) {
+        let (title, items, source) = match setting {
+            "model" => {
+                let models = vec![
+                    PickerItem { label: "claude-opus-4-20250514".into(), description: "Most capable".into(), value: "claude-opus-4-20250514".into() },
+                    PickerItem { label: "claude-sonnet-4-20250514".into(), description: "Balanced".into(), value: "claude-sonnet-4-20250514".into() },
+                    PickerItem { label: "claude-haiku-4-5-20251001".into(), description: "Fastest".into(), value: "claude-haiku-4-5-20251001".into() },
+                ];
+                ("Select Model".into(), models, PickerSource::Model)
+            }
+            "theme" => {
+                let themes = vec![
+                    PickerItem { label: "dark".into(), description: "Dark theme".into(), value: "dark".into() },
+                    PickerItem { label: "light".into(), description: "Light theme".into(), value: "light".into() },
+                    PickerItem { label: "auto".into(), description: "Auto-detect".into(), value: "auto".into() },
+                ];
+                ("Select Theme".into(), themes, PickerSource::Theme)
+            }
+            "permissions" => {
+                let modes = vec![
+                    PickerItem { label: "default".into(), description: "Ask for risky ops".into(), value: "default".into() },
+                    PickerItem { label: "auto".into(), description: "Auto-approve most".into(), value: "auto".into() },
+                    PickerItem { label: "bypass".into(), description: "Skip all checks".into(), value: "bypass".into() },
+                ];
+                ("Permission Mode".into(), modes, PickerSource::Permissions)
+            }
+            "thinking" => {
+                let modes = vec![
+                    PickerItem { label: "disabled".into(), description: "No thinking".into(), value: "disabled".into() },
+                    PickerItem { label: "enabled".into(), description: "Always think".into(), value: "enabled".into() },
+                    PickerItem { label: "adaptive".into(), description: "Think when needed".into(), value: "adaptive".into() },
+                ];
+                ("Thinking Mode".into(), modes, PickerSource::ConfigSub("thinking".into()))
+            }
+            "effort" => {
+                let levels = vec![
+                    PickerItem { label: "low".into(), description: "Minimal thinking".into(), value: "low".into() },
+                    PickerItem { label: "medium".into(), description: "Balanced".into(), value: "medium".into() },
+                    PickerItem { label: "high".into(), description: "More thorough".into(), value: "high".into() },
+                    PickerItem { label: "max".into(), description: "Maximum depth".into(), value: "max".into() },
+                ];
+                ("Effort Level".into(), levels, PickerSource::Effort)
+            }
+            "color" => {
+                let colors = vec![
+                    PickerItem { label: "blue".into(), description: "".into(), value: "blue".into() },
+                    PickerItem { label: "green".into(), description: "".into(), value: "green".into() },
+                    PickerItem { label: "cyan".into(), description: "".into(), value: "cyan".into() },
+                    PickerItem { label: "yellow".into(), description: "".into(), value: "yellow".into() },
+                    PickerItem { label: "red".into(), description: "".into(), value: "red".into() },
+                    PickerItem { label: "magenta".into(), description: "".into(), value: "magenta".into() },
+                    PickerItem { label: "white".into(), description: "".into(), value: "white".into() },
+                ];
+                ("Prompt Color".into(), colors, PickerSource::ConfigSub("color".into()))
+            }
+            _ => return,
+        };
+
+        let mut picker = PickerState::new(title, items, source);
+        // Pre-select current value
+        let current = match setting {
+            "model" => self.engine.model.clone(),
+            "theme" => self.engine.theme.clone(),
+            "permissions" => self.engine.settings.permission_mode.clone().unwrap_or_default(),
+            "thinking" => self.engine.settings.thinking.as_ref()
+                .and_then(|t| t.mode.clone())
+                .unwrap_or_default(),
+            "effort" => self.get_effort_label().to_string(),
+            "color" => self.engine.prompt_color.clone(),
+            _ => String::new(),
+        };
+        if let Some(idx) = picker.items.iter().position(|i| i.value == current) {
+            picker.selected = idx;
+        }
+        self.picker = Some(picker);
+        self.input_mode = InputMode::Picker;
+    }
+
     /// Open the skills picker.
     fn open_skills_picker(&mut self) {
         let skills = self.skill_registry.as_ref()
@@ -1324,6 +1458,36 @@ impl App {
             PickerSource::Skills(_) => {
                 // Skills picker invokes the selected skill
                 return self.handle_slash_command(&format!("/{}", selected.value)).await;
+            }
+            PickerSource::Config => {
+                // Config picker opens sub-picker for the selected setting
+                self.open_config_sub_picker(&selected.value);
+                return Ok(());
+            }
+            PickerSource::ConfigSub(setting) => {
+                match setting.as_str() {
+                    "thinking" => {
+                        use venus_utils::config::ThinkingConfig;
+                        self.engine.settings = Arc::new({
+                            let mut s = (*self.engine.settings).clone();
+                            s.thinking = Some(ThinkingConfig {
+                                mode: Some(selected.value.clone()),
+                                budget_tokens: s.thinking.as_ref().and_then(|t| t.budget_tokens),
+                            });
+                            s
+                        });
+                        self.messages.push(DisplayMessage::Status {
+                            text: format!("Thinking mode: {}", selected.value),
+                        });
+                    }
+                    "color" => {
+                        self.engine.prompt_color = selected.value.clone();
+                        self.messages.push(DisplayMessage::Status {
+                            text: format!("Prompt color: {}", selected.value),
+                        });
+                    }
+                    _ => {}
+                }
             }
         }
 
