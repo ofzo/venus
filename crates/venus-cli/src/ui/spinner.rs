@@ -15,16 +15,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     };
 
     let glyph = app.spinner_glyph();
-    let elapsed = app.spinner.elapsed_secs();
-    let time_str = if elapsed > 0 {
-        if elapsed < 60 {
-            format!(" ({}s)", elapsed)
-        } else {
-            format!(" ({}m{}s)", elapsed / 60, elapsed % 60)
-        }
-    } else {
-        String::new()
-    };
+    let message = app.spinner.display_message();
 
     let line = Line::from(vec![
         Span::styled(
@@ -32,7 +23,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(Color::Cyan),
         ),
         Span::styled(
-            format!("{}{}", app.spinner.message, time_str),
+            message,
             Style::default().fg(Color::DarkGray),
         ),
     ]);

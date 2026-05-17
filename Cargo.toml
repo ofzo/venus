@@ -56,7 +56,6 @@ notify = "7"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "6"
-regex = "1"
 pin-project-lite = "0.2"
 bytes = "1"
 reedline = "0.46"

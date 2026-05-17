@@ -15,8 +15,14 @@ use crate::event::AppEvent;
 use crate::input_state::InputState;
 use venus_permissions::tui_handler::{PermissionRequest, PermissionResponse};
 
-/// Braille spinner frames.
-const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+/// Spinner frames matching Claude Code's Unicode characters.
+const SPINNER_FRAMES: &[&str] = &["·", "✂", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✂"];
+
+/// Random verbs shown during spinner (matching Claude Code's behavior).
+const SPINNER_VERBS: &[&str] = &[
+    "Thinking", "Processing", "Analyzing", "Computing", "Working",
+    "Reasoning", "Planning", "Searching", "Reading", "Writing",
+];
 
 /// A segment of rendered assistant response.
 #[derive(Clone, Debug)]
@@ -110,6 +116,7 @@ pub struct PendingPermission {
     pub tool_name: String,
     pub description: String,
     pub response_tx: tokio::sync::oneshot::Sender<PermissionResponse>,
+    pub selected_option: usize,
 }
 
 /// Spinner animation state.
@@ -118,11 +125,23 @@ pub struct SpinnerState {
     pub message: String,
     pub active: bool,
     pub started_at: Option<Instant>,
+    pub verb_index: usize,
 }
 
 impl SpinnerState {
     pub fn elapsed_secs(&self) -> u64 {
         self.started_at.map(|t| t.elapsed().as_secs()).unwrap_or(0)
+    }
+
+    /// Get the display message with verb and elapsed time (after 30s).
+    pub fn display_message(&self) -> String {
+        let verb = SPINNER_VERBS[self.verb_index % SPINNER_VERBS.len()];
+        let elapsed = self.elapsed_secs();
+        if elapsed >= 30 {
+            format!("{}... ({}s)", verb, elapsed)
+        } else {
+            format!("{}...", verb)
+        }
     }
 }
 
@@ -170,7 +189,7 @@ impl App {
             messages: Vec::new(),
             input: InputState::new(),
             input_mode: InputMode::Normal,
-            spinner: SpinnerState { frame: 0, message: String::new(), active: false, started_at: None },
+            spinner: SpinnerState { frame: 0, message: String::new(), active: false, started_at: None, verb_index: 0 },
             scroll_offset: 0,
             auto_scroll: true,
             cost,
@@ -230,7 +249,7 @@ impl App {
                     // Double-press: first press warns, second press exits
                     let now = Instant::now();
                     if let Some(first) = self.ctrl_c_first {
-                        if now.duration_since(first).as_millis() < 1500 {
+                        if now.duration_since(first).as_millis() < 800 {
                             self.should_quit = true;
                             return Ok(());
                         }
@@ -387,23 +406,41 @@ impl App {
             return Ok(());
         }
 
-        // Permission prompt mode
+        // Permission prompt mode (Select-style navigation)
         if self.input_mode == InputMode::PermissionPrompt {
-            match key.code {
-                KeyCode::Char('y') | KeyCode::Char('Y') => {
+            match (key.modifiers, key.code) {
+                // Up/Down to navigate options
+                (_, KeyCode::Up) | (KeyModifiers::CONTROL, KeyCode::Char('p')) => {
+                    if let Some(ref mut pending) = self.pending_permission {
+                        if pending.selected_option > 0 {
+                            pending.selected_option -= 1;
+                        }
+                    }
+                }
+                (_, KeyCode::Down) | (KeyModifiers::CONTROL, KeyCode::Char('n')) => {
+                    if let Some(ref mut pending) = self.pending_permission {
+                        if pending.selected_option < 2 {
+                            pending.selected_option += 1;
+                        }
+                    }
+                }
+                // Enter to select current option
+                (_, KeyCode::Enter) => {
+                    self.select_permission_option();
+                }
+                // Esc to cancel (deny)
+                (_, KeyCode::Esc) => {
+                    self.respond_permission(PermissionResponse::Deny);
+                }
+                // Direct key shortcuts (still supported for quick access)
+                (_, KeyCode::Char('y') | KeyCode::Char('Y')) => {
                     self.respond_permission(PermissionResponse::Allow);
                 }
-                KeyCode::Char('n') | KeyCode::Char('N') => {
+                (_, KeyCode::Char('n') | KeyCode::Char('N')) => {
                     self.respond_permission(PermissionResponse::Deny);
                 }
-                KeyCode::Char('a') | KeyCode::Char('A') => {
+                (_, KeyCode::Char('a') | KeyCode::Char('A')) => {
                     self.respond_permission(PermissionResponse::AlwaysAllow);
-                }
-                KeyCode::Char('d') | KeyCode::Char('D') => {
-                    self.respond_permission(PermissionResponse::NeverAllow);
-                }
-                KeyCode::Esc => {
-                    self.respond_permission(PermissionResponse::Deny);
                 }
                 _ => {}
             }
@@ -442,7 +479,7 @@ impl App {
                 }
                 let now = Instant::now();
                 if let Some(first) = self.esc_first {
-                    if now.duration_since(first).as_millis() < 1500 {
+                    if now.duration_since(first).as_millis() < 800 {
                         self.input.clear();
                         self.esc_first = None;
                         return Ok(());
@@ -648,6 +685,7 @@ impl App {
             tool_name: req.tool_name,
             description: req.description,
             response_tx: req.response_tx,
+            selected_option: 0,
         });
         self.input_mode = InputMode::PermissionPrompt;
     }
@@ -662,6 +700,19 @@ impl App {
             self.input_mode = InputMode::Streaming;
         } else {
             self.input_mode = InputMode::Normal;
+        }
+    }
+
+    /// Select the current permission option.
+    fn select_permission_option(&mut self) {
+        if let Some(ref pending) = self.pending_permission {
+            let response = match pending.selected_option {
+                0 => PermissionResponse::Allow,
+                1 => PermissionResponse::AlwaysAllow,
+                2 => PermissionResponse::Deny,
+                _ => PermissionResponse::Deny,
+            };
+            self.respond_permission(response);
         }
     }
 
@@ -686,6 +737,7 @@ impl App {
             message: "Thinking...".to_string(),
             active: true,
             started_at: Some(Instant::now()),
+            verb_index: self.tick_count as usize % SPINNER_VERBS.len(),
         };
         self.auto_scroll = true;
         self.scroll_offset = 0;
@@ -701,12 +753,12 @@ impl App {
         }
         // Clear double-press timeouts
         if let Some(first) = self.ctrl_c_first {
-            if first.elapsed().as_millis() > 1500 {
+            if first.elapsed().as_millis() > 800 {
                 self.ctrl_c_first = None;
             }
         }
         if let Some(first) = self.esc_first {
-            if first.elapsed().as_millis() > 1500 {
+            if first.elapsed().as_millis() > 800 {
                 self.esc_first = None;
             }
         }
@@ -746,6 +798,7 @@ impl App {
             message: "Thinking...".to_string(),
             active: true,
             started_at: Some(Instant::now()),
+            verb_index: self.tick_count as usize % SPINNER_VERBS.len(),
         };
         self.auto_scroll = true;
         self.scroll_offset = 0;
@@ -888,6 +941,7 @@ impl App {
                     message: "Thinking...".to_string(),
                     active: true,
                     started_at: Some(Instant::now()),
+                    verb_index: self.tick_count as usize % SPINNER_VERBS.len(),
                 };
             }
             crate::commands::CommandResult::ToggleVim => {
