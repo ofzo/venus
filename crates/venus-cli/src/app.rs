@@ -62,6 +62,13 @@ pub enum PickerSource {
     ConfigSub(String), // Config sub-picker for a specific setting
 }
 
+/// Tab state for tabbed pickers.
+#[derive(Clone, Debug)]
+pub struct TabState {
+    pub tabs: Vec<String>,
+    pub selected_tab: usize,
+}
+
 /// State for an active picker/list selection overlay.
 pub struct PickerState {
     pub title: String,
@@ -70,12 +77,18 @@ pub struct PickerState {
     pub scroll_offset: usize,
     pub source: PickerSource,
     pub visible_count: usize,
+    pub tab_state: Option<TabState>,
 }
 
 impl PickerState {
     pub fn new(title: String, items: Vec<PickerItem>, source: PickerSource) -> Self {
         let visible_count = items.len().min(10);
-        Self { title, items, selected: 0, scroll_offset: 0, source, visible_count }
+        Self { title, items, selected: 0, scroll_offset: 0, source, visible_count, tab_state: None }
+    }
+
+    pub fn with_tabs(mut self, tabs: Vec<String>) -> Self {
+        self.tab_state = Some(TabState { tabs, selected_tab: 0 });
+        self
     }
 
     pub fn move_up(&mut self) {
@@ -355,11 +368,13 @@ impl App {
                         p.move_down();
                     }
                 }
-                // Left/Right arrows - adjust effort in model picker
+                // Left/Right arrows - adjust effort in model picker or switch tabs
                 (_, KeyCode::Left) => {
                     if let Some(ref p) = self.picker {
                         if matches!(p.source, PickerSource::Model) {
                             self.cycle_effort(-1);
+                        } else if p.tab_state.is_some() {
+                            self.picker_tab_prev();
                         }
                     }
                 }
@@ -367,6 +382,8 @@ impl App {
                     if let Some(ref p) = self.picker {
                         if matches!(p.source, PickerSource::Model) {
                             self.cycle_effort(1);
+                        } else if p.tab_state.is_some() {
+                            self.picker_tab_next();
                         }
                     }
                 }
@@ -1036,6 +1053,88 @@ impl App {
         }
     }
 
+    /// Switch to the next tab in a tabbed picker.
+    fn picker_tab_next(&mut self) {
+        if let Some(ref mut picker) = self.picker {
+            if let Some(ref mut tab_state) = picker.tab_state {
+                tab_state.selected_tab = (tab_state.selected_tab + 1) % tab_state.tabs.len();
+                // Update items based on tab
+                self.update_picker_items_for_tab();
+            }
+        }
+    }
+
+    /// Switch to the previous tab in a tabbed picker.
+    fn picker_tab_prev(&mut self) {
+        if let Some(ref mut picker) = self.picker {
+            if let Some(ref mut tab_state) = picker.tab_state {
+                tab_state.selected_tab = if tab_state.selected_tab == 0 {
+                    tab_state.tabs.len() - 1
+                } else {
+                    tab_state.selected_tab - 1
+                };
+                // Update items based on tab
+                self.update_picker_items_for_tab();
+            }
+        }
+    }
+
+    /// Update picker items based on the selected tab.
+    fn update_picker_items_for_tab(&mut self) {
+        if let Some(ref mut picker) = self.picker {
+            let tab_idx = picker.tab_state.as_ref().map(|t| t.selected_tab).unwrap_or(0);
+
+            match &picker.source {
+                PickerSource::Help => {
+                    picker.items = if tab_idx == 0 {
+                        // General tab
+                        vec![
+                            PickerItem { label: "Ctrl+C (x2)".into(), description: "Exit Venus".into(), value: "".into() },
+                            PickerItem { label: "Ctrl+D".into(), description: "Exit Venus".into(), value: "".into() },
+                            PickerItem { label: "Ctrl+L".into(), description: "Redraw screen".into(), value: "".into() },
+                            PickerItem { label: "Ctrl+R".into(), description: "Search history".into(), value: "".into() },
+                            PickerItem { label: "Ctrl+K".into(), description: "Delete to end of line".into(), value: "".into() },
+                            PickerItem { label: "Ctrl+U".into(), description: "Delete to start of line".into(), value: "".into() },
+                            PickerItem { label: "Ctrl+W".into(), description: "Delete word backward".into(), value: "".into() },
+                            PickerItem { label: "Ctrl+G".into(), description: "Open external editor".into(), value: "".into() },
+                            PickerItem { label: "Ctrl+S".into(), description: "Stash prompt".into(), value: "".into() },
+                            PickerItem { label: "Ctrl+Home/End".into(), description: "Scroll to top/bottom".into(), value: "".into() },
+                            PickerItem { label: "Alt+P".into(), description: "Model picker".into(), value: "".into() },
+                            PickerItem { label: "Alt+T".into(), description: "Toggle thinking".into(), value: "".into() },
+                            PickerItem { label: "Alt+O".into(), description: "Toggle fast mode".into(), value: "".into() },
+                            PickerItem { label: "Shift+Tab".into(), description: "Cycle permission mode".into(), value: "".into() },
+                            PickerItem { label: "Ctrl+Shift+P".into(), description: "Command palette".into(), value: "".into() },
+                        ]
+                    } else {
+                        // Commands tab
+                        vec![
+                            PickerItem { label: "/help".into(), description: "Show this help".into(), value: "/help".into() },
+                            PickerItem { label: "/clear".into(), description: "Clear conversation".into(), value: "/clear".into() },
+                            PickerItem { label: "/cost".into(), description: "Show token usage".into(), value: "/cost".into() },
+                            PickerItem { label: "/model".into(), description: "Show or change model".into(), value: "/model".into() },
+                            PickerItem { label: "/status".into(), description: "Show session status".into(), value: "/status".into() },
+                            PickerItem { label: "/compact".into(), description: "Compact conversation".into(), value: "/compact".into() },
+                            PickerItem { label: "/diff".into(), description: "Show git diff".into(), value: "/diff".into() },
+                            PickerItem { label: "/commit".into(), description: "Generate commit message".into(), value: "/commit".into() },
+                            PickerItem { label: "/review".into(), description: "Review code changes".into(), value: "/review".into() },
+                            PickerItem { label: "/sessions".into(), description: "List saved sessions".into(), value: "/sessions".into() },
+                            PickerItem { label: "/resume".into(), description: "Resume a session".into(), value: "/resume".into() },
+                            PickerItem { label: "/fast".into(), description: "Toggle fast mode".into(), value: "/fast".into() },
+                            PickerItem { label: "/permissions".into(), description: "Permission mode".into(), value: "/permissions".into() },
+                            PickerItem { label: "/config".into(), description: "Show configuration".into(), value: "/config".into() },
+                            PickerItem { label: "/theme".into(), description: "Set terminal theme".into(), value: "/theme".into() },
+                            PickerItem { label: "/effort".into(), description: "Set effort level".into(), value: "/effort".into() },
+                            PickerItem { label: "/quit".into(), description: "Exit Venus".into(), value: "/quit".into() },
+                        ]
+                    };
+                    picker.selected = 0;
+                    picker.scroll_offset = 0;
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// Cycle effort level in the model picker.
     fn cycle_effort(&mut self, direction: i32) {
         let current_budget = self.engine.settings.thinking.as_ref().and_then(|t| t.budget_tokens);
@@ -1398,38 +1497,52 @@ impl App {
         self.input_mode = InputMode::Picker;
     }
 
-    /// Open the help picker overlay.
+    /// Open the help picker overlay with tabs (matching Claude Code's HelpV2).
     fn open_help_picker(&mut self) {
-        let items = vec![
-            PickerItem { label: "/help".into(), description: "Show this help".into(), value: "/help".into() },
-            PickerItem { label: "/clear".into(), description: "Clear conversation history".into(), value: "/clear".into() },
-            PickerItem { label: "/cost".into(), description: "Show token usage and cost".into(), value: "/cost".into() },
-            PickerItem { label: "/model".into(), description: "Show or change model (Alt+P)".into(), value: "/model".into() },
-            PickerItem { label: "/status".into(), description: "Show session status".into(), value: "/status".into() },
-            PickerItem { label: "/compact".into(), description: "Compact conversation with AI".into(), value: "/compact".into() },
-            PickerItem { label: "/diff".into(), description: "Show git diff".into(), value: "/diff".into() },
-            PickerItem { label: "/commit".into(), description: "Generate commit message".into(), value: "/commit".into() },
-            PickerItem { label: "/review".into(), description: "Review code changes".into(), value: "/review".into() },
-            PickerItem { label: "/sessions".into(), description: "List saved sessions".into(), value: "/sessions".into() },
-            PickerItem { label: "/resume".into(), description: "Resume a session".into(), value: "/resume".into() },
-            PickerItem { label: "/fast".into(), description: "Toggle fast mode (Alt+O)".into(), value: "/fast".into() },
-            PickerItem { label: "/permissions".into(), description: "Show permission mode (Shift+Tab)".into(), value: "/permissions".into() },
-            PickerItem { label: "/config".into(), description: "Show configuration".into(), value: "/config".into() },
-            PickerItem { label: "/theme".into(), description: "Set terminal theme".into(), value: "/theme".into() },
-            PickerItem { label: "/effort".into(), description: "Set effort level".into(), value: "/effort".into() },
-            PickerItem { label: "/quit".into(), description: "Exit Venus (Ctrl+D or Ctrl+C x2)".into(), value: "/quit".into() },
-            PickerItem { label: "─── Shortcuts ───".into(), description: "".into(), value: "".into() },
+        // General tab items
+        let general_items = vec![
+            PickerItem { label: "Ctrl+C (x2)".into(), description: "Exit Venus".into(), value: "".into() },
+            PickerItem { label: "Ctrl+D".into(), description: "Exit Venus".into(), value: "".into() },
             PickerItem { label: "Ctrl+L".into(), description: "Redraw screen".into(), value: "".into() },
             PickerItem { label: "Ctrl+R".into(), description: "Search history".into(), value: "".into() },
             PickerItem { label: "Ctrl+K".into(), description: "Delete to end of line".into(), value: "".into() },
             PickerItem { label: "Ctrl+U".into(), description: "Delete to start of line".into(), value: "".into() },
             PickerItem { label: "Ctrl+W".into(), description: "Delete word backward".into(), value: "".into() },
-            PickerItem { label: "Alt+P".into(), description: "Open model picker".into(), value: "".into() },
-            PickerItem { label: "Alt+T".into(), description: "Toggle thinking mode".into(), value: "".into() },
+            PickerItem { label: "Ctrl+G".into(), description: "Open external editor".into(), value: "".into() },
+            PickerItem { label: "Ctrl+S".into(), description: "Stash prompt".into(), value: "".into() },
+            PickerItem { label: "Ctrl+Home/End".into(), description: "Scroll to top/bottom".into(), value: "".into() },
+            PickerItem { label: "Alt+P".into(), description: "Model picker".into(), value: "".into() },
+            PickerItem { label: "Alt+T".into(), description: "Toggle thinking".into(), value: "".into() },
             PickerItem { label: "Alt+O".into(), description: "Toggle fast mode".into(), value: "".into() },
             PickerItem { label: "Shift+Tab".into(), description: "Cycle permission mode".into(), value: "".into() },
+            PickerItem { label: "Ctrl+Shift+P".into(), description: "Command palette".into(), value: "".into() },
         ];
-        let picker = PickerState::new("Commands & Shortcuts".into(), items, PickerSource::Help);
+
+        // Commands tab items
+        let command_items = vec![
+            PickerItem { label: "/help".into(), description: "Show this help".into(), value: "/help".into() },
+            PickerItem { label: "/clear".into(), description: "Clear conversation".into(), value: "/clear".into() },
+            PickerItem { label: "/cost".into(), description: "Show token usage".into(), value: "/cost".into() },
+            PickerItem { label: "/model".into(), description: "Show or change model".into(), value: "/model".into() },
+            PickerItem { label: "/status".into(), description: "Show session status".into(), value: "/status".into() },
+            PickerItem { label: "/compact".into(), description: "Compact conversation".into(), value: "/compact".into() },
+            PickerItem { label: "/diff".into(), description: "Show git diff".into(), value: "/diff".into() },
+            PickerItem { label: "/commit".into(), description: "Generate commit message".into(), value: "/commit".into() },
+            PickerItem { label: "/review".into(), description: "Review code changes".into(), value: "/review".into() },
+            PickerItem { label: "/sessions".into(), description: "List saved sessions".into(), value: "/sessions".into() },
+            PickerItem { label: "/resume".into(), description: "Resume a session".into(), value: "/resume".into() },
+            PickerItem { label: "/fast".into(), description: "Toggle fast mode".into(), value: "/fast".into() },
+            PickerItem { label: "/permissions".into(), description: "Permission mode".into(), value: "/permissions".into() },
+            PickerItem { label: "/config".into(), description: "Show configuration".into(), value: "/config".into() },
+            PickerItem { label: "/theme".into(), description: "Set terminal theme".into(), value: "/theme".into() },
+            PickerItem { label: "/effort".into(), description: "Set effort level".into(), value: "/effort".into() },
+            PickerItem { label: "/quit".into(), description: "Exit Venus".into(), value: "/quit".into() },
+        ];
+
+        // Use general tab by default
+        let tabs = vec!["general".to_string(), "commands".to_string()];
+        let picker = PickerState::new("Venus Help".into(), general_items, PickerSource::Help)
+            .with_tabs(tabs);
         self.picker = Some(picker);
         self.input_mode = InputMode::Picker;
     }

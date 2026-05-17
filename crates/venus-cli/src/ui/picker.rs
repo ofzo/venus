@@ -25,11 +25,12 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let popup_width = (max_label_width + 6).min(area.width.saturating_sub(4)).max(30);
     let visible_count = picker.visible_count.min(picker.items.len()) as u16;
 
-    // Extra lines for model picker (effort display)
+    // Extra lines for model picker (effort display) and tabs
     let extra_lines = if matches!(picker.source, PickerSource::Model) { 2 } else { 0 };
+    let tab_lines = if picker.tab_state.is_some() { 1 } else { 0 };
 
-    // +2 for borders, +1 for hint footer, +extra for model picker
-    let popup_height = (visible_count + 3 + extra_lines).min(area.height.saturating_sub(2));
+    // +2 for borders, +1 for hint footer, +extra for model picker, +tabs
+    let popup_height = (visible_count + 3 + extra_lines + tab_lines).min(area.height.saturating_sub(2));
 
     let x = (area.width.saturating_sub(popup_width)) / 2;
     let y = (area.height.saturating_sub(popup_height)) / 2;
@@ -38,6 +39,32 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     // Dim background behind popup
     let bg = Block::default().style(Style::default().bg(Color::Black));
     frame.render_widget(bg, popup_area);
+
+    // Render tabs if present
+    let mut current_y = popup_area.y;
+    if let Some(ref tab_state) = picker.tab_state {
+        let tab_area = Rect::new(popup_area.x, current_y, popup_width, 1);
+        let mut tab_spans = vec![Span::styled(
+            format!("  {}: ", picker.title),
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        )];
+        for (i, tab) in tab_state.tabs.iter().enumerate() {
+            let is_selected = i == tab_state.selected_tab;
+            let style = if is_selected {
+                Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            tab_spans.push(Span::styled(format!(" {} ", tab), style));
+            if i < tab_state.tabs.len() - 1 {
+                tab_spans.push(Span::styled(" ", Style::default()));
+            }
+        }
+        let tab_line = Line::from(tab_spans);
+        let tab_paragraph = Paragraph::new(tab_line).style(Style::default().bg(Color::Black));
+        frame.render_widget(tab_paragraph, tab_area);
+        current_y += 1;
+    }
 
     // Build list items
     let items: Vec<ListItem> = picker.items
@@ -89,11 +116,15 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         String::new()
     };
 
-    let title = format!(" {}{} ", picker.title, scroll_info);
+    let title = if picker.tab_state.is_some() {
+        "".to_string() // Tabs already shown
+    } else {
+        format!(" {}{} ", picker.title, scroll_info)
+    };
 
     // Split popup into list area, effort area (for model picker), and hint area
-    let list_height = popup_height.saturating_sub(1 + extra_lines);
-    let list_area = Rect::new(popup_area.x, popup_area.y, popup_width, list_height);
+    let list_height = popup_height.saturating_sub(1 + extra_lines + tab_lines);
+    let list_area = Rect::new(popup_area.x, current_y, popup_width, list_height);
     let hint_area = Rect::new(popup_area.x, popup_area.y + popup_height - 1, popup_width, 1);
 
     let block = Block::default()
@@ -109,7 +140,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 
     // Render effort display for model picker (matching Claude Code's ModelPicker)
     if matches!(picker.source, PickerSource::Model) && extra_lines > 0 {
-        let effort_area = Rect::new(popup_area.x, popup_area.y + list_height, popup_width, extra_lines);
+        let effort_area = Rect::new(popup_area.x, current_y + list_height, popup_width, extra_lines);
         let effort = app.get_effort_label();
         let effort_indicator = match effort {
             "low" => "○",
