@@ -15,7 +15,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             DisplayMessage::User { text } => {
                 lines.push(Line::from(vec![
                     Span::styled("> ", Style::default().fg(Color::Cyan)),
-                    Span::raw(text.clone()),
+                    Span::styled(text.clone(), Style::default().add_modifier(Modifier::BOLD)),
                 ]));
                 lines.push(Line::from(""));
             }
@@ -23,11 +23,9 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                 for segment in segments {
                     match segment {
                         RenderSegment::Text(text) => {
-                            // Parse markdown line by line
-                            for line in text.split('\n') {
-                                let styled = render_markdown_line(line);
-                                lines.push(styled);
-                            }
+                            // Parse markdown with code block support
+                            let rendered = render_markdown_with_code_blocks(text);
+                            lines.extend(rendered);
                         }
                     }
                 }
@@ -98,8 +96,51 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(paragraph, area);
 }
 
+/// Render markdown text with code block support.
+fn render_markdown_with_code_blocks(text: &str) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let mut in_code_block = false;
+    let mut code_lang = String::new();
+
+    for line in text.split('\n') {
+        // Check for code block start/end
+        if line.starts_with("```") {
+            if in_code_block {
+                // End of code block
+                in_code_block = false;
+                lines.push(Line::from(Span::styled(
+                    "  ────────────────────────────────────",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            } else {
+                // Start of code block
+                in_code_block = true;
+                code_lang = line[3..].trim().to_string();
+                lines.push(Line::from(Span::styled(
+                    format!("  ┌─ {} ─────────────────────────────", if code_lang.is_empty() { "code" } else { &code_lang }),
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+            continue;
+        }
+
+        if in_code_block {
+            // Render code line with syntax highlighting
+            let highlighted = markdown_tui::highlight_code_line(line, &code_lang);
+            let mut spans = vec![Span::styled("  │ ", Style::default().fg(Color::DarkGray))];
+            spans.extend(highlighted);
+            lines.push(Line::from(spans));
+        } else {
+            // Regular markdown line
+            lines.push(render_markdown_line(line));
+        }
+    }
+
+    lines
+}
+
 /// Render a single markdown line with inline formatting.
-fn render_markdown_line(line: &str) -> Line<'_> {
+fn render_markdown_line(line: &str) -> Line<'static> {
     // Headers
     if let Some(content) = line.strip_prefix("#### ") {
         return Line::from(Span::styled(
