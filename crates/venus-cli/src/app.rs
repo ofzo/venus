@@ -220,6 +220,10 @@ impl App {
                     self.picker = None;
                     self.input_mode = InputMode::Normal;
                     return Ok(());
+                } else if self.input_mode == InputMode::HistorySearch {
+                    self.input_mode = InputMode::Normal;
+                    self.input.clear();
+                    return Ok(());
                 } else {
                     // Double-press: first press warns, second press exits
                     let now = Instant::now();
@@ -232,6 +236,10 @@ impl App {
                     self.ctrl_c_first = Some(now);
                     if !self.input.buffer.is_empty() {
                         self.input.clear();
+                    } else {
+                        self.messages.push(DisplayMessage::Status {
+                            text: "Press Ctrl+C again to exit".to_string(),
+                        });
                     }
                     return Ok(());
                 }
@@ -271,6 +279,20 @@ impl App {
             (KeyModifiers::ALT, KeyCode::Char('o')) => {
                 if self.input_mode == InputMode::Normal {
                     self.toggle_fast_mode();
+                }
+                return Ok(());
+            }
+            // Ctrl+Shift+P - quick open command palette
+            (KeyModifiers::CONTROL | KeyModifiers::SHIFT, KeyCode::Char('p')) => {
+                if self.input_mode == InputMode::Normal {
+                    self.open_help_picker();
+                }
+                return Ok(());
+            }
+            // Ctrl+Shift+F - search messages (future)
+            (KeyModifiers::CONTROL | KeyModifiers::SHIFT, KeyCode::Char('f')) => {
+                if self.input_mode == InputMode::Normal {
+                    self.open_history_search();
                 }
                 return Ok(());
             }
@@ -373,21 +395,29 @@ impl App {
             }
             (KeyModifiers::NONE, KeyCode::Esc) => {
                 // Double-press Esc: first clears completions/history, second clears input
-                let now = Instant::now();
-                if self.input.completion_matches.is_empty() && self.input.history_index.is_none() {
-                    if let Some(first) = self.esc_first {
-                        if now.duration_since(first).as_millis() < 1500 {
-                            self.input.clear();
-                            self.esc_first = None;
-                            return Ok(());
-                        }
-                    }
-                    self.esc_first = Some(now);
+                if !self.input.completion_matches.is_empty() {
+                    self.input.clear_completions();
+                    return Ok(());
                 }
-                self.input.clear_completions();
-                self.input.history_index = None;
-                if self.input.buffer.is_empty() {
-                    self.input.clear();
+                if self.input.history_index.is_some() {
+                    self.input.history_index = None;
+                    self.input.buffer = self.input.history_working.clone();
+                    self.input.cursor_pos = self.input.buffer.len();
+                    return Ok(());
+                }
+                let now = Instant::now();
+                if let Some(first) = self.esc_first {
+                    if now.duration_since(first).as_millis() < 1500 {
+                        self.input.clear();
+                        self.esc_first = None;
+                        return Ok(());
+                    }
+                }
+                self.esc_first = Some(now);
+                if !self.input.buffer.is_empty() {
+                    self.messages.push(DisplayMessage::Status {
+                        text: "Press Esc again to clear input".to_string(),
+                    });
                 }
             }
             (KeyModifiers::NONE, KeyCode::Tab) => {

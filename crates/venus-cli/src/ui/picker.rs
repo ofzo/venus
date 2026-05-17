@@ -14,18 +14,24 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 
     // Calculate popup dimensions
     let max_label_width = picker.items.iter()
-        .map(|i| i.label.len() as u16)
+        .map(|i| {
+            let label_w = i.label.chars().count() as u16;
+            let desc_w = if i.description.is_empty() { 0 } else { i.description.chars().count() as u16 + 3 };
+            label_w + desc_w
+        })
         .max()
-        .unwrap_or(10);
-    let popup_width = (max_label_width + 12).min(area.width.saturating_sub(4)).max(30);
+        .unwrap_or(20)
+        .max(picker.title.chars().count() as u16 + 4);
+    let popup_width = (max_label_width + 6).min(area.width.saturating_sub(4)).max(30);
     let visible_count = picker.visible_count.min(picker.items.len()) as u16;
-    let popup_height = (visible_count + 3).min(area.height.saturating_sub(2)); // +3 for title, border, hint
+    // +2 for borders, +1 for hint footer
+    let popup_height = (visible_count + 3).min(area.height.saturating_sub(2));
 
     let x = (area.width.saturating_sub(popup_width)) / 2;
     let y = (area.height.saturating_sub(popup_height)) / 2;
     let popup_area = Rect::new(x, y, popup_width, popup_height);
 
-    // Clear background
+    // Dim background behind popup
     let bg = Block::default().style(Style::default().bg(Color::Black));
     frame.render_widget(bg, popup_area);
 
@@ -37,6 +43,15 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         .take(picker.visible_count)
         .map(|(i, item)| {
             let is_selected = i == picker.selected;
+            let is_separator = item.value.is_empty() && item.description.is_empty();
+
+            if is_separator {
+                return ListItem::new(Line::from(Span::styled(
+                    format!("  {}", item.label),
+                    Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
+                )));
+            }
+
             let style = if is_selected {
                 Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
             } else {
@@ -50,30 +65,32 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                 Style::default().fg(Color::DarkGray)
             };
 
-            let line = Line::from(vec![
+            let mut spans = vec![
                 Span::styled(prefix, style),
                 Span::styled(item.label.clone(), style),
-                if item.description.is_empty() {
-                    Span::raw(String::new())
-                } else {
-                    Span::styled(format!(" — {}", item.description), desc_style)
-                },
-            ]);
-            ListItem::new(line)
+            ];
+            if !item.description.is_empty() {
+                spans.push(Span::styled(format!(" — {}", item.description), desc_style));
+            }
+            ListItem::new(Line::from(spans))
         })
         .collect();
 
-    // Scroll indicator
+    // Scroll indicator in title
     let total = picker.items.len();
     let scroll_info = if total > picker.visible_count {
-        let start = picker.scroll_offset + 1;
         let end = (picker.scroll_offset + picker.visible_count).min(total);
-        format!(" {}-{}/{} ", start, end, total)
+        format!(" {}/{} ", end, total)
     } else {
         String::new()
     };
 
     let title = format!(" {}{} ", picker.title, scroll_info);
+
+    // Split popup into list area and hint area
+    let list_height = popup_height.saturating_sub(1);
+    let list_area = Rect::new(popup_area.x, popup_area.y, popup_width, list_height);
+    let hint_area = Rect::new(popup_area.x, popup_area.y + list_height, popup_width, 1);
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -84,5 +101,18 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         ));
 
     let list = List::new(items).block(block);
-    frame.render_widget(list, popup_area);
+    frame.render_widget(list, list_area);
+
+    // Render keyboard hint at bottom
+    let hint = Paragraph::new(Line::from(vec![
+        Span::styled(" ↑↓", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled(" navigate ", Style::default().fg(Color::DarkGray)),
+        Span::styled("Enter", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled(" select ", Style::default().fg(Color::DarkGray)),
+        Span::styled("Esc", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled(" cancel", Style::default().fg(Color::DarkGray)),
+    ]))
+    .alignment(Alignment::Center)
+    .style(Style::default().bg(Color::Black));
+    frame.render_widget(hint, hint_area);
 }
