@@ -13,13 +13,18 @@ use crate::app::{App, InputMode};
 pub fn render(frame: &mut Frame, app: &App) {
     let area = frame.area();
 
-    // Layout: status bar (top, 1 row) + messages (middle, fills) + input (bottom, 3 rows)
+    // Layout matching Claude Code's REPL:
+    // - Status line (1 row, only if configured)
+    // - Messages (fills middle)
+    // - Spinner (1 row, overlaid at bottom of messages)
+    // - marginTop=1 (blank line above input)
+    // - Input area (3 rows: top border + content + bottom border)
     let [status_area, messages_area, input_area] = ratatui::layout::Layout::default()
         .direction(ratatui::layout::Direction::Vertical)
         .constraints([
-            ratatui::layout::Constraint::Length(1),
-            ratatui::layout::Constraint::Min(3),
-            ratatui::layout::Constraint::Length(3),
+            ratatui::layout::Constraint::Length(1),  // status line
+            ratatui::layout::Constraint::Min(3),      // messages
+            ratatui::layout::Constraint::Length(3),   // input (3 rows for borders)
         ])
         .areas(area);
 
