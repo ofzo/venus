@@ -62,7 +62,6 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     // Pane starts at left edge with paddingX=2
     let pane_x = 0u16;
     let pane_y = (area.height.saturating_sub(popup_height)) / 2;
-    let pane_area = Rect::new(pane_x, pane_y, popup_width, popup_height);
 
     // Content paddingX=2
     let content_x = pane_x + 2;
@@ -78,10 +77,14 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         let tab_state = picker.tab_state.as_ref().unwrap();
         let tab_area = Rect::new(content_x, current_y, content_width, 1);
         let mut tab_spans = vec![];
-        // Title
+        // Title (matching Claude Code's Tabs component)
+        let title_color = match picker.source {
+            PickerSource::Help => Color::Blue,    // "professionalBlue"
+            _ => Color::Yellow,                    // "permission"
+        };
         tab_spans.push(Span::styled(
             picker.title.clone(),
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD), // "professionalBlue" / "permission"
+            Style::default().fg(title_color).add_modifier(Modifier::BOLD),
         ));
         tab_spans.push(Span::raw("  "));
         // Tabs
@@ -91,11 +94,13 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             }
             let is_current = i == tab_state.selected_tab;
             if is_current {
+                // Current tab: bold, space-padded
                 tab_spans.push(Span::styled(
                     format!(" {} ", tab),
                     Style::default().add_modifier(Modifier::BOLD),
                 ));
             } else {
+                // Other tabs: dimmed
                 tab_spans.push(Span::styled(
                     format!(" {} ", tab),
                     Style::default().fg(Color::DarkGray),
@@ -105,7 +110,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         frame.render_widget(Paragraph::new(Line::from(tab_spans)), tab_area);
         current_y += 1;
     } else {
-        // Colored divider line
+        // Colored divider line (matching Claude Code's Divider component)
         let divider_color = match picker.source {
             PickerSource::Help => Color::Blue,
             _ => Color::Yellow, // "permission"
