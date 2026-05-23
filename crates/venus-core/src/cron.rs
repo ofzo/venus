@@ -24,7 +24,7 @@ impl CronExpr {
     /// Parse a 5-field cron expression.
     /// Supports: * (wildcard), N (specific), N-M (range), */N (step), N,M (list)
     pub fn parse(expr: &str) -> Result<Self> {
-        let fields: Vec<&str> = expr.trim().split_whitespace().collect();
+        let fields: Vec<&str> = expr.split_whitespace().collect();
         if fields.len() != 5 {
             anyhow::bail!(
                 "cron expression must have exactly 5 fields, got {}",

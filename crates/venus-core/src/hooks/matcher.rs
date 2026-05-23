@@ -28,8 +28,8 @@ fn glob_match(pattern: &str, name: &str) -> bool {
     if pattern == "*" {
         return true;
     }
-    if pattern.ends_with('*') {
-        name.starts_with(&pattern[..pattern.len() - 1])
+    if let Some(stripped) = pattern.strip_suffix('*') {
+        name.starts_with(stripped)
     } else {
         pattern == name
     }

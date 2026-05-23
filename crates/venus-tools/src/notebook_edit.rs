@@ -92,7 +92,7 @@ impl Tool for NotebookEditTool {
             "source": source_lines,
             "metadata": {},
             "outputs": if cell_type == "code" { serde_json::json!([]) } else { Value::Null },
-            "execution_count": if cell_type == "code" { Value::Null } else { Value::Null },
+            "execution_count": Value::Null,
         });
 
         match edit_mode {

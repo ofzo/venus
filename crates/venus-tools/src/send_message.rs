@@ -38,7 +38,7 @@ impl Tool for SendMessageTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("missing 'task_id' parameter"))?;
 
-        let message = input
+        let _message = input
             .get("message")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("missing 'message' parameter"))?;

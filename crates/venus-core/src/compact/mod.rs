@@ -352,7 +352,7 @@ pub async fn reactive_compact(
     .await?;
 
     // Replace old messages with compressed summary
-    let summary_msg = Message::User(UserMessage::new(vec![ContentBlock::text(&format!(
+    let summary_msg = Message::User(UserMessage::new(vec![ContentBlock::text(format!(
         "[Context compressed]\n{}",
         compressed
     ))]));

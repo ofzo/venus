@@ -6,8 +6,6 @@ use venus_core::message::Message;
 use venus_core::skill::SkillRegistry;
 use venus_utils::session;
 
-use crate::render;
-
 /// Print a line to stderr using \r\n (required for raw-mode terminal).
 macro_rules! eprintlf {
     () => {

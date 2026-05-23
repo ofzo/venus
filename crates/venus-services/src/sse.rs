@@ -68,6 +68,12 @@ impl SseParser {
     }
 }
 
+impl Default for SseParser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Read SSE events from a reqwest byte stream.
 pub async fn read_sse_stream(
     stream: impl futures_core::Stream<Item = reqwest::Result<Bytes>> + Unpin,

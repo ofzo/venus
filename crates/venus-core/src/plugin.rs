@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Top-level manifest for a plugin, stored as `plugin.json` in the plugin directory.
 #[derive(Debug, Clone, Deserialize)]
@@ -88,7 +88,7 @@ impl PluginLoader {
     }
 
     /// Load a single plugin from a directory that must contain `plugin.json`.
-    pub async fn load_plugin(dir: &PathBuf) -> Result<Plugin> {
+    pub async fn load_plugin(dir: &Path) -> Result<Plugin> {
         let manifest_path = dir.join("plugin.json");
         let data = std::fs::read_to_string(&manifest_path)
             .with_context(|| format!("failed to read {}", manifest_path.display()))?;
@@ -96,7 +96,7 @@ impl PluginLoader {
             .with_context(|| format!("failed to parse {}", manifest_path.display()))?;
         Ok(Plugin {
             manifest,
-            base_dir: dir.clone(),
+            base_dir: dir.to_path_buf(),
         })
     }
 }

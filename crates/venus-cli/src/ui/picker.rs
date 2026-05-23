@@ -7,6 +7,7 @@ use crate::app::{App, PickerSource};
 
 /// Unicode figures matching Claude Code's figures.ts exactly
 const POINTER: &str = "\u{276F}";     // ❯
+#[allow(dead_code)]
 const TICK: &str = "\u{2714}";        // ✔
 const ARROW_UP: &str = "\u{2191}";    // ↑
 const ARROW_DOWN: &str = "\u{2193}";  // ↓
@@ -306,7 +307,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let footer_text = match picker.source {
         PickerSource::Help => {
             // Help footer: italic, dimColor: "Esc to cancel"
-            format!("Esc to cancel")
+            "Esc to cancel".to_string()
         }
         PickerSource::Config => {
             // Config footer (Byline format): "Space to change · Enter to save · / to search · Esc to cancel"

@@ -9,6 +9,7 @@ pub enum AppEvent {
     /// Mouse input (for scroll).
     Mouse(MouseEvent),
     /// Terminal resize.
+    #[allow(dead_code)]
     Resize(u16, u16),
     /// Tick for animation (spinner, 100ms interval).
     Tick,
@@ -29,20 +30,14 @@ pub fn spawn_event_poller() -> mpsc::UnboundedReceiver<AppEvent> {
         loop {
             if cevent::poll(std::time::Duration::from_millis(100)).unwrap_or(false) {
                 match cevent::read() {
-                    Ok(CEvent::Key(key)) => {
-                        if key_tx.send(AppEvent::Key(key)).is_err() {
-                            break;
-                        }
+                    Ok(CEvent::Key(key)) if key_tx.send(AppEvent::Key(key)).is_err() => {
+                        break;
                     }
-                    Ok(CEvent::Mouse(mouse)) => {
-                        if key_tx.send(AppEvent::Mouse(mouse)).is_err() {
-                            break;
-                        }
+                    Ok(CEvent::Mouse(mouse)) if key_tx.send(AppEvent::Mouse(mouse)).is_err() => {
+                        break;
                     }
-                    Ok(CEvent::Resize(w, h)) => {
-                        if key_tx.send(AppEvent::Resize(w, h)).is_err() {
-                            break;
-                        }
+                    Ok(CEvent::Resize(w, h)) if key_tx.send(AppEvent::Resize(w, h)).is_err() => {
+                        break;
                     }
                     _ => {}
                 }

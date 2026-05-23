@@ -23,8 +23,8 @@ fn tool_name_matches(rule_tool: &str, actual: &str) -> bool {
     if rule_tool == actual {
         return true;
     }
-    if rule_tool.ends_with('*') {
-        actual.starts_with(&rule_tool[..rule_tool.len() - 1])
+    if let Some(stripped) = rule_tool.strip_suffix('*') {
+        actual.starts_with(stripped)
     } else {
         false
     }

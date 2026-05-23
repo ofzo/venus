@@ -58,6 +58,7 @@ pub enum PickerSource {
     Resume(Vec<venus_utils::session::SessionMeta>),
     Permissions,
     Effort,
+    #[allow(dead_code)]
     Skills(Vec<String>),
     Config,
     ConfigSub(String), // Config sub-picker for a specific setting
@@ -136,6 +137,7 @@ pub struct PendingPermission {
 /// Spinner animation state.
 pub struct SpinnerState {
     pub frame: usize,
+    #[allow(dead_code)]
     pub message: String,
     pub active: bool,
     pub started_at: Option<Instant>,
@@ -149,6 +151,7 @@ impl SpinnerState {
 
     /// Get the display message with verb and elapsed time (after 30s).
     /// Uses ellipsis character U+2026 matching Claude Code's SpinnerWithVerb.
+    #[allow(dead_code)]
     pub fn display_message(&self) -> String {
         let verb = SPINNER_VERBS[self.verb_index % SPINNER_VERBS.len()];
         let elapsed = self.elapsed_secs();
@@ -691,7 +694,7 @@ impl App {
 
                 // Find the last ToolCall for this name and update it
                 if let Some(DisplayMessage::ToolCall {
-                    name: n, is_error, summary: s, ..
+                    name: _n, is_error, summary: s, ..
                 }) = self
                     .messages
                     .iter_mut()
@@ -789,7 +792,7 @@ impl App {
     /// Handle a cron-scheduled prompt.
     pub async fn handle_cron_prompt(&mut self, prompt: &str) -> Result<()> {
         self.messages.push(DisplayMessage::Status {
-            text: format!("[cron] Executing scheduled prompt..."),
+            text: "[cron] Executing scheduled prompt...".to_string(),
         });
 
         let content = vec![ContentBlock::text(prompt)];
@@ -1445,7 +1448,7 @@ impl App {
         ];
 
         // Config tab items
-        let config_items = vec![
+        let _config_items = [
             PickerItem {
                 label: "Model".into(),
                 description: format!("Current: {}", self.engine.model),
@@ -1482,7 +1485,7 @@ impl App {
 
         // Usage tab items
         let tracker = self.engine.cost_tracker.lock().unwrap();
-        let usage_items = vec![
+        let _usage_items = [
             PickerItem {
                 label: "Total Cost".into(),
                 description: tracker.format_cost(),
@@ -1618,17 +1621,7 @@ impl App {
                 value: String::new(),
             });
             for line in staged.lines().take(100) {
-                let (label, desc) = if line.starts_with("+++") || line.starts_with("---") {
-                    (line.to_string(), String::new())
-                } else if line.starts_with("+") {
-                    (line.to_string(), String::new())
-                } else if line.starts_with("-") {
-                    (line.to_string(), String::new())
-                } else if line.starts_with("@@") {
-                    (line.to_string(), String::new())
-                } else {
-                    (line.to_string(), String::new())
-                };
+                let (label, desc) = (line.to_string(), String::new());
                 items.push(PickerItem { label, description: desc, value: String::new() });
             }
         }
@@ -1702,7 +1695,7 @@ impl App {
         ];
 
         // Commands tab items
-        let command_items = vec![
+        let _command_items = vec![
             PickerItem { label: "/help".into(), description: "Show this help".into(), value: "/help".into() },
             PickerItem { label: "/clear".into(), description: "Clear conversation".into(), value: "/clear".into() },
             PickerItem { label: "/cost".into(), description: "Show token usage".into(), value: "/cost".into() },

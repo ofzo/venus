@@ -351,9 +351,9 @@ impl HookRunner {
 
         // Map HTTP status to exit code semantics:
         // 2xx = success (0), 4xx = client error (1), 5xx = server error (2)
-        let exit_code = if status_code >= 200 && status_code < 300 {
+        let exit_code = if (200..300).contains(&status_code) {
             0
-        } else if status_code >= 400 && status_code < 500 {
+        } else if (400..500).contains(&status_code) {
             1
         } else {
             2

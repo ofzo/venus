@@ -164,7 +164,7 @@ impl PermissionHandler for TuiPermissionHandler {
         }
 
         // 4. Read-only tools — auto-allow
-        if READ_ONLY_TOOLS.iter().any(|&t| t == tool_name) {
+        if READ_ONLY_TOOLS.contains(&tool_name) {
             return PermissionDecision::Allow;
         }
 
@@ -195,7 +195,7 @@ impl PermissionHandler for TuiPermissionHandler {
             .settings
             .permission_mode
             .as_deref()
-            .map(PermissionMode::from_str)
+            .map(PermissionMode::parse_mode)
             .unwrap_or(PermissionMode::Default);
         match mode {
             PermissionMode::Bypass => {

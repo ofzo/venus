@@ -120,10 +120,5 @@ fn find_closing(chars: &[char], start: usize, marker: &[char; 2]) -> Option<usiz
 }
 
 fn find_single_closing(chars: &[char], start: usize, marker: char) -> Option<usize> {
-    for j in start..chars.len() {
-        if chars[j] == marker {
-            return Some(j);
-        }
-    }
-    None
+    (start..chars.len()).find(|&j| chars[j] == marker)
 }

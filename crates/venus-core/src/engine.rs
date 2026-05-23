@@ -83,14 +83,11 @@ impl QueryEngine {
         let base_url = settings.effective_base_url().to_string();
         let max_tokens = settings.effective_max_tokens();
 
-        // Build system prompt
-        let system_prompt = build_system_prompt(&working_dir).await;
-
         // Read max_turns and budget from settings
         let max_turns = settings.max_turns.unwrap_or(25);
         let budget_usd = settings.budget_usd;
 
-        // Append custom_system_prompt if configured
+        // Build system prompt and append custom_system_prompt if configured
         let mut system_prompt = build_system_prompt(&working_dir).await;
         if let Some(ref custom) = settings.custom_system_prompt {
             system_prompt.push_str("\n\n");
@@ -130,6 +127,7 @@ impl QueryEngine {
 
     /// Create a QueryEngine for a sub-agent with a custom system prompt.
     /// Skips the expensive build_system_prompt (git context, CLAUDE.md loading).
+    #[allow(clippy::too_many_arguments)]
     pub fn new_for_subagent(
         auth_header: &'static str,
         auth_value: String,

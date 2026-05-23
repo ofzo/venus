@@ -157,17 +157,15 @@ fn strip_html_tags(html: &str) -> String {
                     result.push('\n');
                 }
             }
-            _ if in_tag => {
-                if capturing_tag_name {
-                    if c.is_whitespace() || c == '/' && tag_name.is_empty() {
-                        if !tag_name.is_empty() {
-                            capturing_tag_name = false;
-                        } else if c == '/' {
-                            tag_name.push(c);
-                        }
-                    } else {
+            _ if in_tag && capturing_tag_name => {
+                if c.is_whitespace() || c == '/' && tag_name.is_empty() {
+                    if !tag_name.is_empty() {
+                        capturing_tag_name = false;
+                    } else if c == '/' {
                         tag_name.push(c);
                     }
+                } else {
+                    tag_name.push(c);
                 }
             }
             _ if !in_script && !in_style => {

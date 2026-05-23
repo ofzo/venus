@@ -1,7 +1,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tracing::debug;
 
 use crate::fs_helpers;
@@ -345,7 +345,7 @@ impl Settings {
             .unwrap_or("anthropic")
     }
 
-    pub fn project_settings_path(project_root: &PathBuf) -> PathBuf {
+    pub fn project_settings_path(project_root: &Path) -> PathBuf {
         project_root.join(".venus").join("config.toml")
     }
 }

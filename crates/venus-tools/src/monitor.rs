@@ -1,6 +1,6 @@
 use anyhow::Result;
 use async_trait::async_trait;
-use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc as std_mpsc;

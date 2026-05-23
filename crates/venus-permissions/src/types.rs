@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PermissionMode {
+    #[default]
     Default,
     Auto,
     Plan,
@@ -9,7 +10,7 @@ pub enum PermissionMode {
 }
 
 impl PermissionMode {
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse_mode(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "bypass" | "yolo" => Self::Bypass,
             "plan" => Self::Plan,
@@ -19,24 +20,18 @@ impl PermissionMode {
     }
 }
 
-impl Default for PermissionMode {
-    fn default() -> Self {
-        Self::Default
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn parse_modes() {
-        assert_eq!(PermissionMode::from_str("default"), PermissionMode::Default);
-        assert_eq!(PermissionMode::from_str("bypass"), PermissionMode::Bypass);
-        assert_eq!(PermissionMode::from_str("yolo"), PermissionMode::Bypass);
-        assert_eq!(PermissionMode::from_str("plan"), PermissionMode::Plan);
-        assert_eq!(PermissionMode::from_str("auto"), PermissionMode::Auto);
-        assert_eq!(PermissionMode::from_str("unknown"), PermissionMode::Default);
-        assert_eq!(PermissionMode::from_str("BYPASS"), PermissionMode::Bypass);
+        assert_eq!(PermissionMode::parse_mode("default"), PermissionMode::Default);
+        assert_eq!(PermissionMode::parse_mode("bypass"), PermissionMode::Bypass);
+        assert_eq!(PermissionMode::parse_mode("yolo"), PermissionMode::Bypass);
+        assert_eq!(PermissionMode::parse_mode("plan"), PermissionMode::Plan);
+        assert_eq!(PermissionMode::parse_mode("auto"), PermissionMode::Auto);
+        assert_eq!(PermissionMode::parse_mode("unknown"), PermissionMode::Default);
+        assert_eq!(PermissionMode::parse_mode("BYPASS"), PermissionMode::Bypass);
     }
 }

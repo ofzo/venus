@@ -77,7 +77,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                 } else {
                     // Resolved state: tool_name (summary)
                     // No icon prefix, just tool name and result
-                    let color = if *is_error { Color::Red } else { Color::Green };
+                    let _color = if *is_error { Color::Red } else { Color::Green };
                     lines.push(Line::from(vec![
                         Span::styled(
                             name.clone(),
@@ -135,7 +135,7 @@ fn render_markdown_with_code_blocks(text: &str) -> Vec<Line<'static>> {
 
     for line in text.split('\n') {
         // Check for code block start/end
-        if line.starts_with("```") {
+        if let Some(stripped) = line.strip_prefix("```") {
             if in_code_block {
                 // End of code block
                 in_code_block = false;
@@ -146,7 +146,7 @@ fn render_markdown_with_code_blocks(text: &str) -> Vec<Line<'static>> {
             } else {
                 // Start of code block
                 in_code_block = true;
-                code_lang = line[3..].trim().to_string();
+                code_lang = stripped.trim().to_string();
                 lines.push(Line::from(Span::styled(
                     format!("  ┌─ {} ─────────────────────────────", if code_lang.is_empty() { "code" } else { &code_lang }),
                     Style::default().fg(Color::DarkGray),

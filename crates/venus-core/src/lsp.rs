@@ -509,17 +509,14 @@ fn parse_symbols(result: &Value) -> Vec<LspSymbol> {
         // DocumentSymbol has "range"/"selectionRange", SymbolInformation has "location"
         let location = if let Some(loc) = item.get("location") {
             parse_single_location(loc)
-        } else if let Some(range) = item.get("selectionRange").or_else(|| item.get("range")) {
-            // DocumentSymbol — no URI, use empty file path
-            Some(LspLocation {
+        } else {
+            item.get("selectionRange").or_else(|| item.get("range")).map(|range| LspLocation {
                 file: String::new(),
                 line: range.get("start").and_then(|s| s.get("line")).and_then(|v| v.as_u64()).unwrap_or(0) as u32 + 1,
                 character: range.get("start").and_then(|s| s.get("character")).and_then(|v| v.as_u64()).unwrap_or(0) as u32 + 1,
                 end_line: range.get("end").and_then(|e| e.get("line")).and_then(|v| v.as_u64()).map(|v| v as u32 + 1),
                 end_character: range.get("end").and_then(|e| e.get("character")).and_then(|v| v.as_u64()).map(|v| v as u32 + 1),
             })
-        } else {
-            None
         };
 
         if let Some(loc) = location {

@@ -85,6 +85,12 @@ impl SkillRegistry {
     }
 }
 
+impl Default for SkillRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Parse a skill from a markdown file with YAML frontmatter.
 fn parse_skill_file(path: &Path) -> Result<Skill> {
     let content = std::fs::read_to_string(path)?;
