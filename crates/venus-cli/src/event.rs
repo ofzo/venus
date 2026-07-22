@@ -26,21 +26,19 @@ pub fn spawn_event_poller() -> mpsc::UnboundedReceiver<AppEvent> {
 
     // Crossterm event polling thread (blocking)
     let key_tx = tx.clone();
-    std::thread::spawn(move || {
-        loop {
-            if cevent::poll(std::time::Duration::from_millis(100)).unwrap_or(false) {
-                match cevent::read() {
-                    Ok(CEvent::Key(key)) if key_tx.send(AppEvent::Key(key)).is_err() => {
-                        break;
-                    }
-                    Ok(CEvent::Mouse(mouse)) if key_tx.send(AppEvent::Mouse(mouse)).is_err() => {
-                        break;
-                    }
-                    Ok(CEvent::Resize(w, h)) if key_tx.send(AppEvent::Resize(w, h)).is_err() => {
-                        break;
-                    }
-                    _ => {}
+    std::thread::spawn(move || loop {
+        if cevent::poll(std::time::Duration::from_millis(100)).unwrap_or(false) {
+            match cevent::read() {
+                Ok(CEvent::Key(key)) if key_tx.send(AppEvent::Key(key)).is_err() => {
+                    break;
                 }
+                Ok(CEvent::Mouse(mouse)) if key_tx.send(AppEvent::Mouse(mouse)).is_err() => {
+                    break;
+                }
+                Ok(CEvent::Resize(w, h)) if key_tx.send(AppEvent::Resize(w, h)).is_err() => {
+                    break;
+                }
+                _ => {}
             }
         }
     });

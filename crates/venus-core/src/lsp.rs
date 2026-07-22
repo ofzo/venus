@@ -98,12 +98,27 @@ impl LspManager {
         let uri = path_to_uri(file_path);
 
         match operation {
-            "goToDefinition" => self.request_locations(&ext, "textDocument/definition", &uri, lsp_line, lsp_char).await,
-            "findReferences" => self.request_references(&ext, &uri, lsp_line, lsp_char).await,
+            "goToDefinition" => {
+                self.request_locations(&ext, "textDocument/definition", &uri, lsp_line, lsp_char)
+                    .await
+            }
+            "findReferences" => {
+                self.request_references(&ext, &uri, lsp_line, lsp_char)
+                    .await
+            }
             "hover" => self.request_hover(&ext, &uri, lsp_line, lsp_char).await,
             "documentSymbol" => self.request_document_symbols(&ext, &uri).await,
             "workspaceSymbol" => self.request_workspace_symbols(&ext, "").await,
-            "goToImplementation" => self.request_locations(&ext, "textDocument/implementation", &uri, lsp_line, lsp_char).await,
+            "goToImplementation" => {
+                self.request_locations(
+                    &ext,
+                    "textDocument/implementation",
+                    &uri,
+                    lsp_line,
+                    lsp_char,
+                )
+                .await
+            }
             _ => Ok(LspResult::Error(format!("unknown operation: {operation}"))),
         }
     }
@@ -113,7 +128,15 @@ impl LspManager {
         let mut servers = self.servers.lock().await;
         for (lang, server) in servers.iter_mut() {
             debug!("shutting down {lang} language server");
-            if let Err(e) = send_request(&mut server.stdin, &mut server.reader, &mut server.next_id, "shutdown", json!(null)).await {
+            if let Err(e) = send_request(
+                &mut server.stdin,
+                &mut server.reader,
+                &mut server.next_id,
+                "shutdown",
+                json!(null),
+            )
+            .await
+            {
                 warn!("error shutting down {lang} server: {e}");
             }
             if let Err(e) = send_notification(&mut server.stdin, "exit", json!(null)).await {
@@ -165,7 +188,14 @@ impl LspManager {
         });
         let mut servers = self.servers.lock().await;
         let server = servers.get_mut(ext).ok_or_else(|| anyhow!("no server"))?;
-        let resp = send_request(&mut server.stdin, &mut server.reader, &mut server.next_id, method, params).await?;
+        let resp = send_request(
+            &mut server.stdin,
+            &mut server.reader,
+            &mut server.next_id,
+            method,
+            params,
+        )
+        .await?;
         Ok(LspResult::Locations(parse_locations(&resp)))
     }
 
@@ -183,7 +213,14 @@ impl LspManager {
         });
         let mut servers = self.servers.lock().await;
         let server = servers.get_mut(ext).ok_or_else(|| anyhow!("no server"))?;
-        let resp = send_request(&mut server.stdin, &mut server.reader, &mut server.next_id, "textDocument/references", params).await?;
+        let resp = send_request(
+            &mut server.stdin,
+            &mut server.reader,
+            &mut server.next_id,
+            "textDocument/references",
+            params,
+        )
+        .await?;
         Ok(LspResult::Locations(parse_locations(&resp)))
     }
 
@@ -200,7 +237,14 @@ impl LspManager {
         });
         let mut servers = self.servers.lock().await;
         let server = servers.get_mut(ext).ok_or_else(|| anyhow!("no server"))?;
-        let resp = send_request(&mut server.stdin, &mut server.reader, &mut server.next_id, "textDocument/hover", params).await?;
+        let resp = send_request(
+            &mut server.stdin,
+            &mut server.reader,
+            &mut server.next_id,
+            "textDocument/hover",
+            params,
+        )
+        .await?;
         Ok(LspResult::Hover(parse_hover(&resp)))
     }
 
@@ -208,7 +252,14 @@ impl LspManager {
         let params = json!({ "textDocument": { "uri": uri } });
         let mut servers = self.servers.lock().await;
         let server = servers.get_mut(ext).ok_or_else(|| anyhow!("no server"))?;
-        let resp = send_request(&mut server.stdin, &mut server.reader, &mut server.next_id, "textDocument/documentSymbol", params).await?;
+        let resp = send_request(
+            &mut server.stdin,
+            &mut server.reader,
+            &mut server.next_id,
+            "textDocument/documentSymbol",
+            params,
+        )
+        .await?;
         Ok(LspResult::Symbols(parse_symbols(&resp)))
     }
 
@@ -216,7 +267,14 @@ impl LspManager {
         let params = json!({ "query": query });
         let mut servers = self.servers.lock().await;
         let server = servers.get_mut(ext).ok_or_else(|| anyhow!("no server"))?;
-        let resp = send_request(&mut server.stdin, &mut server.reader, &mut server.next_id, "workspace/symbol", params).await?;
+        let resp = send_request(
+            &mut server.stdin,
+            &mut server.reader,
+            &mut server.next_id,
+            "workspace/symbol",
+            params,
+        )
+        .await?;
         Ok(LspResult::Symbols(parse_symbols(&resp)))
     }
 }
@@ -440,7 +498,11 @@ fn parse_locations(result: &Value) -> Vec<LspLocation> {
     for item in &items {
         // LocationLink has targetUri/targetRange, Location has uri/range
         let (uri, range) = if let Some(target_uri) = item.get("targetUri") {
-            (target_uri, item.get("targetSelectionRange").or_else(|| item.get("targetRange")))
+            (
+                target_uri,
+                item.get("targetSelectionRange")
+                    .or_else(|| item.get("targetRange")),
+            )
         } else {
             (item.get("uri").unwrap_or(&Value::Null), item.get("range"))
         };
@@ -454,8 +516,14 @@ fn parse_locations(result: &Value) -> Vec<LspLocation> {
                 file,
                 line: start.get("line").and_then(|v| v.as_u64()).unwrap_or(0) as u32 + 1,
                 character: start.get("character").and_then(|v| v.as_u64()).unwrap_or(0) as u32 + 1,
-                end_line: end.get("line").and_then(|v| v.as_u64()).map(|v| v as u32 + 1),
-                end_character: end.get("character").and_then(|v| v.as_u64()).map(|v| v as u32 + 1),
+                end_line: end
+                    .get("line")
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as u32 + 1),
+                end_character: end
+                    .get("character")
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as u32 + 1),
             });
         }
     }
@@ -484,7 +552,9 @@ fn parse_hover(result: &Value) -> String {
             arr.iter()
                 .filter_map(|item| match item {
                     Value::String(s) => Some(s.clone()),
-                    Value::Object(obj) => obj.get("value").and_then(|v| v.as_str()).map(String::from),
+                    Value::Object(obj) => {
+                        obj.get("value").and_then(|v| v.as_str()).map(String::from)
+                    }
                     _ => None,
                 })
                 .collect::<Vec<_>>()
@@ -502,7 +572,11 @@ fn parse_symbols(result: &Value) -> Vec<LspSymbol> {
     };
 
     for item in items {
-        let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let name = item
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         let kind_num = item.get("kind").and_then(|v| v.as_u64()).unwrap_or(0);
         let kind = symbol_kind_name(kind_num as u32);
 
@@ -510,17 +584,41 @@ fn parse_symbols(result: &Value) -> Vec<LspSymbol> {
         let location = if let Some(loc) = item.get("location") {
             parse_single_location(loc)
         } else {
-            item.get("selectionRange").or_else(|| item.get("range")).map(|range| LspLocation {
-                file: String::new(),
-                line: range.get("start").and_then(|s| s.get("line")).and_then(|v| v.as_u64()).unwrap_or(0) as u32 + 1,
-                character: range.get("start").and_then(|s| s.get("character")).and_then(|v| v.as_u64()).unwrap_or(0) as u32 + 1,
-                end_line: range.get("end").and_then(|e| e.get("line")).and_then(|v| v.as_u64()).map(|v| v as u32 + 1),
-                end_character: range.get("end").and_then(|e| e.get("character")).and_then(|v| v.as_u64()).map(|v| v as u32 + 1),
-            })
+            item.get("selectionRange")
+                .or_else(|| item.get("range"))
+                .map(|range| LspLocation {
+                    file: String::new(),
+                    line: range
+                        .get("start")
+                        .and_then(|s| s.get("line"))
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0) as u32
+                        + 1,
+                    character: range
+                        .get("start")
+                        .and_then(|s| s.get("character"))
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0) as u32
+                        + 1,
+                    end_line: range
+                        .get("end")
+                        .and_then(|e| e.get("line"))
+                        .and_then(|v| v.as_u64())
+                        .map(|v| v as u32 + 1),
+                    end_character: range
+                        .get("end")
+                        .and_then(|e| e.get("character"))
+                        .and_then(|v| v.as_u64())
+                        .map(|v| v as u32 + 1),
+                })
         };
 
         if let Some(loc) = location {
-            out.push(LspSymbol { name, kind, location: loc });
+            out.push(LspSymbol {
+                name,
+                kind,
+                location: loc,
+            });
         }
 
         // Recurse into children (DocumentSymbol)
@@ -542,8 +640,14 @@ fn parse_single_location(loc: &Value) -> Option<LspLocation> {
         file: uri_to_path(uri),
         line: start.get("line").and_then(|v| v.as_u64()).unwrap_or(0) as u32 + 1,
         character: start.get("character").and_then(|v| v.as_u64()).unwrap_or(0) as u32 + 1,
-        end_line: end.and_then(|e| e.get("line")).and_then(|v| v.as_u64()).map(|v| v as u32 + 1),
-        end_character: end.and_then(|e| e.get("character")).and_then(|v| v.as_u64()).map(|v| v as u32 + 1),
+        end_line: end
+            .and_then(|e| e.get("line"))
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32 + 1),
+        end_character: end
+            .and_then(|e| e.get("character"))
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32 + 1),
     })
 }
 

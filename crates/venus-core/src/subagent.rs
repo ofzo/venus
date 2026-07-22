@@ -29,6 +29,9 @@ pub struct SubAgentConfig {
     pub task_store: Arc<TaskStore>,
     pub background_runtime: Arc<BackgroundTaskRuntime>,
     pub hook_runner: Arc<HookRunner>,
+    /// Optional shared parent cost tracker. When `Some`, sub-agent
+    /// token usage is aggregated into the parent engine's tracker.
+    pub cost_tracker: Option<Arc<std::sync::Mutex<venus_utils::cost::CostTracker>>>,
 }
 
 /// Result returned by a sub-agent execution.
@@ -56,10 +59,12 @@ impl SubAgent {
         // Fire SubagentStart hook
         let subagent_session = uuid::Uuid::new_v4().to_string();
         let hook_runner = config.hook_runner.clone();
-        hook_runner.run_simple_event(HookEvent::SubagentStart {
-            session_id: subagent_session.clone(),
-            description: config.description.clone(),
-        }).await;
+        hook_runner
+            .run_simple_event(HookEvent::SubagentStart {
+                session_id: subagent_session.clone(),
+                description: config.description.clone(),
+            })
+            .await;
 
         let model = config
             .model
@@ -80,6 +85,7 @@ impl SubAgent {
             config.task_store,
             config.background_runtime,
             config.hook_runner,
+            config.cost_tracker.clone(),
         );
 
         // Submit the prompt as a user message and run the query loop.
@@ -104,9 +110,11 @@ impl SubAgent {
         );
 
         // Fire SubagentStop hook
-        hook_runner.run_simple_event(HookEvent::SubagentStop {
-            session_id: subagent_session,
-        }).await;
+        hook_runner
+            .run_simple_event(HookEvent::SubagentStop {
+                session_id: subagent_session,
+            })
+            .await;
 
         Ok(SubAgentResult {
             output,
@@ -151,10 +159,7 @@ mod tests {
 
     #[test]
     fn test_extract_from_last_assistant() {
-        let messages = vec![
-            make_user_msg("question"),
-            make_assistant_msg(&["answer"]),
-        ];
+        let messages = vec![make_user_msg("question"), make_assistant_msg(&["answer"])];
         assert_eq!(extract_final_response(&messages), "answer");
     }
 

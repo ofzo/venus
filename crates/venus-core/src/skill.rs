@@ -51,9 +51,9 @@ impl SkillRegistry {
                     Ok(skill) => {
                         debug!("loaded skill '{}' from {}", skill.name, path.display());
                         // Remove existing skill with same name (later dirs override)
-                        registry.skills.retain(|s| {
-                            s.name.to_lowercase() != skill.name.to_lowercase()
-                        });
+                        registry
+                            .skills
+                            .retain(|s| s.name.to_lowercase() != skill.name.to_lowercase());
                         registry.skills.push(skill);
                     }
                     Err(e) => {
@@ -213,12 +213,10 @@ mod tests {
             "---\nname: commit\ndescription: V2\n---\n\nV2 body.",
         );
 
-        let registry = SkillRegistry::load_from_dirs(&[
-            dir1.path().to_path_buf(),
-            dir2.path().to_path_buf(),
-        ])
-        .await
-        .unwrap();
+        let registry =
+            SkillRegistry::load_from_dirs(&[dir1.path().to_path_buf(), dir2.path().to_path_buf()])
+                .await
+                .unwrap();
 
         let commit = registry.find("commit").unwrap();
         assert_eq!(commit.description, "V2");
@@ -226,10 +224,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_missing_dir_is_ok() {
-        let registry =
-            SkillRegistry::load_from_dirs(&[PathBuf::from("/nonexistent/path/skills")])
-                .await
-                .unwrap();
+        let registry = SkillRegistry::load_from_dirs(&[PathBuf::from("/nonexistent/path/skills")])
+            .await
+            .unwrap();
         assert!(registry.all().is_empty());
     }
 }

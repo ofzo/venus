@@ -187,16 +187,19 @@ mod tests {
         store.create("B".to_string(), "".to_string(), None);
         store.create("C".to_string(), "".to_string(), None);
 
-        store.update("task_2", TaskUpdate {
-            status: Some(TaskStatus::Deleted),
-            subject: None,
-            description: None,
-            active_form: None,
-            owner: None,
-            add_blocks: None,
-            add_blocked_by: None,
-            metadata: None,
-        });
+        store.update(
+            "task_2",
+            TaskUpdate {
+                status: Some(TaskStatus::Deleted),
+                subject: None,
+                description: None,
+                active_form: None,
+                owner: None,
+                add_blocks: None,
+                add_blocked_by: None,
+                metadata: None,
+            },
+        );
 
         let tasks = store.list();
         assert_eq!(tasks.len(), 2);
@@ -208,16 +211,21 @@ mod tests {
         let store = TaskStore::new();
         store.create("Task".to_string(), "".to_string(), None);
 
-        let updated = store.update("task_1", TaskUpdate {
-            status: Some(TaskStatus::InProgress),
-            subject: None,
-            description: None,
-            active_form: None,
-            owner: None,
-            add_blocks: None,
-            add_blocked_by: None,
-            metadata: None,
-        }).unwrap();
+        let updated = store
+            .update(
+                "task_1",
+                TaskUpdate {
+                    status: Some(TaskStatus::InProgress),
+                    subject: None,
+                    description: None,
+                    active_form: None,
+                    owner: None,
+                    add_blocks: None,
+                    add_blocked_by: None,
+                    metadata: None,
+                },
+            )
+            .unwrap();
 
         assert_eq!(updated.status, TaskStatus::InProgress);
     }
@@ -227,16 +235,21 @@ mod tests {
         let store = TaskStore::new();
         store.create("Old".to_string(), "Old desc".to_string(), None);
 
-        let updated = store.update("task_1", TaskUpdate {
-            status: None,
-            subject: Some("New".to_string()),
-            description: Some("New desc".to_string()),
-            active_form: None,
-            owner: None,
-            add_blocks: None,
-            add_blocked_by: None,
-            metadata: None,
-        }).unwrap();
+        let updated = store
+            .update(
+                "task_1",
+                TaskUpdate {
+                    status: None,
+                    subject: Some("New".to_string()),
+                    description: Some("New desc".to_string()),
+                    active_form: None,
+                    owner: None,
+                    add_blocks: None,
+                    add_blocked_by: None,
+                    metadata: None,
+                },
+            )
+            .unwrap();
 
         assert_eq!(updated.subject, "New");
         assert_eq!(updated.description, "New desc");
@@ -247,30 +260,40 @@ mod tests {
         let store = TaskStore::new();
         store.create("Task".to_string(), "".to_string(), None);
 
-        let updated = store.update("task_1", TaskUpdate {
-            status: None,
-            subject: None,
-            description: None,
-            active_form: None,
-            owner: None,
-            add_blocks: Some(vec!["task_2".to_string(), "task_3".to_string()]),
-            add_blocked_by: None,
-            metadata: None,
-        }).unwrap();
+        let updated = store
+            .update(
+                "task_1",
+                TaskUpdate {
+                    status: None,
+                    subject: None,
+                    description: None,
+                    active_form: None,
+                    owner: None,
+                    add_blocks: Some(vec!["task_2".to_string(), "task_3".to_string()]),
+                    add_blocked_by: None,
+                    metadata: None,
+                },
+            )
+            .unwrap();
 
         assert_eq!(updated.blocks, vec!["task_2", "task_3"]);
 
         // Adding duplicate should not duplicate
-        let updated2 = store.update("task_1", TaskUpdate {
-            status: None,
-            subject: None,
-            description: None,
-            active_form: None,
-            owner: None,
-            add_blocks: Some(vec!["task_2".to_string()]),
-            add_blocked_by: None,
-            metadata: None,
-        }).unwrap();
+        let updated2 = store
+            .update(
+                "task_1",
+                TaskUpdate {
+                    status: None,
+                    subject: None,
+                    description: None,
+                    active_form: None,
+                    owner: None,
+                    add_blocks: Some(vec!["task_2".to_string()]),
+                    add_blocked_by: None,
+                    metadata: None,
+                },
+            )
+            .unwrap();
 
         assert_eq!(updated2.blocks.len(), 2);
     }
@@ -280,16 +303,21 @@ mod tests {
         let store = TaskStore::new();
         store.create("Task".to_string(), "".to_string(), None);
 
-        let updated = store.update("task_1", TaskUpdate {
-            status: None,
-            subject: None,
-            description: None,
-            active_form: None,
-            owner: None,
-            add_blocks: None,
-            add_blocked_by: Some(vec!["task_0".to_string()]),
-            metadata: None,
-        }).unwrap();
+        let updated = store
+            .update(
+                "task_1",
+                TaskUpdate {
+                    status: None,
+                    subject: None,
+                    description: None,
+                    active_form: None,
+                    owner: None,
+                    add_blocks: None,
+                    add_blocked_by: Some(vec!["task_0".to_string()]),
+                    metadata: None,
+                },
+            )
+            .unwrap();
 
         assert_eq!(updated.blocked_by, vec!["task_0"]);
     }
@@ -302,16 +330,21 @@ mod tests {
         let mut meta = HashMap::new();
         meta.insert("key".to_string(), serde_json::json!("value"));
 
-        let updated = store.update("task_1", TaskUpdate {
-            status: None,
-            subject: None,
-            description: None,
-            active_form: None,
-            owner: None,
-            add_blocks: None,
-            add_blocked_by: None,
-            metadata: Some(meta),
-        }).unwrap();
+        let updated = store
+            .update(
+                "task_1",
+                TaskUpdate {
+                    status: None,
+                    subject: None,
+                    description: None,
+                    active_form: None,
+                    owner: None,
+                    add_blocks: None,
+                    add_blocked_by: None,
+                    metadata: Some(meta),
+                },
+            )
+            .unwrap();
 
         assert_eq!(updated.metadata["key"], serde_json::json!("value"));
     }
@@ -319,25 +352,40 @@ mod tests {
     #[test]
     fn test_update_nonexistent_returns_none() {
         let store = TaskStore::new();
-        let result = store.update("task_999", TaskUpdate {
-            status: Some(TaskStatus::Completed),
-            subject: None,
-            description: None,
-            active_form: None,
-            owner: None,
-            add_blocks: None,
-            add_blocked_by: None,
-            metadata: None,
-        });
+        let result = store.update(
+            "task_999",
+            TaskUpdate {
+                status: Some(TaskStatus::Completed),
+                subject: None,
+                description: None,
+                active_form: None,
+                owner: None,
+                add_blocks: None,
+                add_blocked_by: None,
+                metadata: None,
+            },
+        );
         assert!(result.is_none());
     }
 
     #[test]
     fn test_task_status_serialization() {
-        assert_eq!(serde_json::to_string(&TaskStatus::Pending).unwrap(), "\"pending\"");
-        assert_eq!(serde_json::to_string(&TaskStatus::InProgress).unwrap(), "\"in_progress\"");
-        assert_eq!(serde_json::to_string(&TaskStatus::Completed).unwrap(), "\"completed\"");
-        assert_eq!(serde_json::to_string(&TaskStatus::Deleted).unwrap(), "\"deleted\"");
+        assert_eq!(
+            serde_json::to_string(&TaskStatus::Pending).unwrap(),
+            "\"pending\""
+        );
+        assert_eq!(
+            serde_json::to_string(&TaskStatus::InProgress).unwrap(),
+            "\"in_progress\""
+        );
+        assert_eq!(
+            serde_json::to_string(&TaskStatus::Completed).unwrap(),
+            "\"completed\""
+        );
+        assert_eq!(
+            serde_json::to_string(&TaskStatus::Deleted).unwrap(),
+            "\"deleted\""
+        );
     }
 
     #[test]

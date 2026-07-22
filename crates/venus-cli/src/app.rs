@@ -6,9 +6,9 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKi
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use venus_core::engine::QueryEngine;
-use venus_core::message::ContentBlock;
-use venus_core::stream::StreamEvent;
+use venus_core::message::{ContentBlock, Message};
 use venus_core::skill::SkillRegistry;
+use venus_core::stream::StreamEvent;
 use venus_utils::session::{self, SessionMeta};
 
 use crate::event::AppEvent;
@@ -17,12 +17,23 @@ use venus_permissions::tui_handler::{PermissionRequest, PermissionResponse};
 
 /// Spinner frames matching Claude Code's Unicode characters exactly.
 /// macOS: ['·', '✢', '✳', '✶', '✻', '✽'] forward + reverse = 12 frames
-const SPINNER_FRAMES: &[&str] = &["\u{00B7}", "\u{2722}", "\u{2733}", "\u{2736}", "\u{273B}", "\u{273D}", "\u{273B}", "\u{2736}", "\u{2733}", "\u{2722}", "\u{00B7}", "\u{00B7}"];
+const SPINNER_FRAMES: &[&str] = &[
+    "\u{00B7}", "\u{2722}", "\u{2733}", "\u{2736}", "\u{273B}", "\u{273D}", "\u{273B}", "\u{2736}",
+    "\u{2733}", "\u{2722}", "\u{00B7}", "\u{00B7}",
+];
 
 /// Random verbs shown during spinner (matching Claude Code's behavior).
 pub const SPINNER_VERBS: &[&str] = &[
-    "Thinking", "Processing", "Analyzing", "Computing", "Working",
-    "Reasoning", "Planning", "Searching", "Reading", "Writing",
+    "Thinking",
+    "Processing",
+    "Analyzing",
+    "Computing",
+    "Working",
+    "Reasoning",
+    "Planning",
+    "Searching",
+    "Reading",
+    "Writing",
 ];
 
 /// A segment of rendered assistant response.
@@ -34,11 +45,27 @@ pub enum RenderSegment {
 /// A single conversation message for display.
 #[derive(Clone, Debug)]
 pub enum DisplayMessage {
-    User { text: String },
-    Assistant { segments: Vec<RenderSegment> },
-    ToolCall { name: String, activity: String, is_error: bool, summary: String },
-    Error { text: String },
-    Status { text: String },
+    User {
+        text: String,
+    },
+    Assistant {
+        segments: Vec<RenderSegment>,
+    },
+    ToolCall {
+        name: String,
+        activity: String,
+        is_error: bool,
+        output: String,
+        /// Optional structured `+/-` preview captured by Write/Edit tools.
+        /// `None` for all other tools (and for error/no-op calls).
+        diff: Option<venus_utils::diff::ToolDiff>,
+    },
+    Error {
+        text: String,
+    },
+    Status {
+        text: String,
+    },
 }
 
 /// A single item in a picker list.
@@ -85,11 +112,22 @@ pub struct PickerState {
 impl PickerState {
     pub fn new(title: String, items: Vec<PickerItem>, source: PickerSource) -> Self {
         let visible_count = items.len().min(10);
-        Self { title, items, selected: 0, scroll_offset: 0, source, visible_count, tab_state: None }
+        Self {
+            title,
+            items,
+            selected: 0,
+            scroll_offset: 0,
+            source,
+            visible_count,
+            tab_state: None,
+        }
     }
 
     pub fn with_tabs(mut self, tabs: Vec<String>) -> Self {
-        self.tab_state = Some(TabState { tabs, selected_tab: 0 });
+        self.tab_state = Some(TabState {
+            tabs,
+            selected_tab: 0,
+        });
         self
     }
 
@@ -174,6 +212,9 @@ pub struct App {
     pub auto_scroll: bool,
     pub cost: String,
     pub branch: Option<String>,
+    /// Compact working-tree change summary for the bottom status bar
+    /// (e.g. "~3+10-2"), computed from `git diff HEAD --shortstat`.
+    pub git_changes: String,
     pub should_quit: bool,
     pub tick_count: u64,
     pub skill_registry: Option<Arc<SkillRegistry>>,
@@ -201,17 +242,25 @@ impl App {
     ) -> Self {
         let cost = engine.cost_tracker.lock().unwrap().format_cost();
         let branch = get_git_branch(&engine.working_dir);
+        let git_changes = get_git_changes(&engine.working_dir);
 
         Self {
             engine,
             messages: Vec::new(),
             input: InputState::new(),
             input_mode: InputMode::Normal,
-            spinner: SpinnerState { frame: 0, message: String::new(), active: false, started_at: None, verb_index: 0 },
+            spinner: SpinnerState {
+                frame: 0,
+                message: String::new(),
+                active: false,
+                started_at: None,
+                verb_index: 0,
+            },
             scroll_offset: 0,
             auto_scroll: true,
             cost,
             branch,
+            git_changes,
             should_quit: false,
             tick_count: 0,
             skill_registry,
@@ -535,7 +584,7 @@ impl App {
             }
             (KeyModifiers::NONE, KeyCode::Esc) => {
                 // Double-press Esc: first clears completions/history, second clears input
-                if !self.input.completion_matches.is_empty() {
+                if !self.input.completion_items.is_empty() {
                     self.input.clear_completions();
                     return Ok(());
                 }
@@ -561,23 +610,23 @@ impl App {
                 }
             }
             (KeyModifiers::NONE, KeyCode::Tab) => {
-                if self.input.buffer.starts_with('/') {
-                    self.input.complete_slash();
-                    if !self.input.completion_matches.is_empty() {
-                        self.input.accept_completion();
-                    }
-                } else if self.input.file_completion_active {
-                    self.input.complete_file_path(&self.engine.working_dir);
-                    if !self.input.file_completions.is_empty() {
-                        self.input.accept_file_completion();
-                    }
+                if !self.input.completion_items.is_empty() {
+                    self.input.accept_completion();
                 }
             }
             (KeyModifiers::NONE, KeyCode::Up) => {
-                self.input.history_up();
+                if !self.input.completion_items.is_empty() {
+                    self.input.move_completion(-1);
+                } else {
+                    self.input.history_up();
+                }
             }
             (KeyModifiers::NONE, KeyCode::Down) => {
-                self.input.history_down();
+                if !self.input.completion_items.is_empty() {
+                    self.input.move_completion(1);
+                } else {
+                    self.input.history_down();
+                }
             }
             (KeyModifiers::NONE, KeyCode::PageUp) => {
                 self.auto_scroll = false;
@@ -613,25 +662,31 @@ impl App {
             // Ctrl+K - delete to end of line
             (KeyModifiers::CONTROL, KeyCode::Char('k')) => {
                 self.input.delete_to_end();
+                self.input.update_completions(&self.engine.working_dir);
             }
             // Ctrl+U - delete to start of line
             (KeyModifiers::CONTROL, KeyCode::Char('u')) => {
                 self.input.delete_to_start();
+                self.input.update_completions(&self.engine.working_dir);
             }
             // Ctrl+W - delete word backward
             (KeyModifiers::CONTROL, KeyCode::Char('w')) => {
                 self.input.delete_word_backward();
+                self.input.update_completions(&self.engine.working_dir);
             }
             (_, KeyCode::Char(c)) => {
                 self.ctrl_c_first = None;
                 self.esc_first = None;
                 self.input.insert_char(c);
+                self.input.update_completions(&self.engine.working_dir);
             }
             (KeyModifiers::NONE, KeyCode::Backspace) => {
                 self.input.backspace();
+                self.input.update_completions(&self.engine.working_dir);
             }
             (KeyModifiers::NONE, KeyCode::Delete) => {
                 self.input.delete();
+                self.input.update_completions(&self.engine.working_dir);
             }
             (KeyModifiers::NONE, KeyCode::Left) => {
                 self.input.move_cursor_left();
@@ -666,7 +721,8 @@ impl App {
                     name,
                     activity: String::new(),
                     is_error: false,
-                    summary: String::new(),
+                    output: String::new(),
+                    diff: None,
                 });
             }
             StreamEvent::ToolUseInput(json) => {
@@ -688,21 +744,23 @@ impl App {
                     })
                     .collect::<Vec<_>>()
                     .join("\n");
-                let line_count = text.lines().count().max(1);
-                let char_count = text.chars().count();
-                let summary = format!("{} ({} lines, {} chars)", name, line_count, char_count);
-
-                // Find the last ToolCall for this name and update it
+                // Find the last ToolCall for this name and stash the real
+                // (multi-line) tool output so the renderer can draw the
+                // box-drawing tree; `is_error` drives red treatment.
                 if let Some(DisplayMessage::ToolCall {
-                    name: _n, is_error, summary: s, ..
-                }) = self
-                    .messages
-                    .iter_mut()
-                    .rev()
-                    .find(|m| matches!(m, DisplayMessage::ToolCall { name: n, .. } if n == &name))
+                    name: _n,
+                    is_error,
+                    output,
+                    diff,
+                    ..
+                }) =
+                    self.messages.iter_mut().rev().find(
+                        |m| matches!(m, DisplayMessage::ToolCall { name: n, .. } if n == &name),
+                    )
                 {
                     *is_error = result.is_error;
-                    *s = summary;
+                    *output = text;
+                    *diff = result.diff.clone();
                 }
             }
             StreamEvent::MessageComplete(_) => {
@@ -888,6 +946,115 @@ impl App {
                 });
                 return Ok(());
             }
+            "/return" => {
+                // /return [#N] — rewind the conversation to just before the
+                // Nth user message (1-based, counting every user message in
+                // the display list, including slash-command echoes). The Nth
+                // user message and everything after is dropped from both the
+                // transcript and the engine's LLM history, so the next user
+                // input becomes the new #N.
+                //
+                // With no argument, rewind the *last* user message: the
+                // previous real user turn plus its reply are dropped. Note
+                // `submit_input` has already pushed the `/return` echo as a
+                // user message, so the last real user message sits at overall
+                // ordinal (total_user_count - 1); rewinding before it removes
+                // that turn alongside the just-typed `/return` echo.
+                let n: usize = match input.split_whitespace().nth(1) {
+                    None => {
+                        let total: usize = self
+                            .messages
+                            .iter()
+                            .filter(|m| matches!(m, DisplayMessage::User { .. }))
+                            .count();
+                        let n = total.saturating_sub(1);
+                        if n == 0 {
+                            self.messages.push(DisplayMessage::Status {
+                                text: "Nothing to rewind; no prior user message.".to_string(),
+                            });
+                            return Ok(());
+                        }
+                        n
+                    }
+                    Some(raw) => {
+                        let cleaned = raw.trim().trim_start_matches('#');
+                        match cleaned.parse::<usize>() {
+                            Ok(0) => {
+                                self.messages.push(DisplayMessage::Status {
+                                    text: "Ordinals are 1-based; use e.g. /return #1.".to_string(),
+                                });
+                                return Ok(());
+                            }
+                            Ok(n) => n,
+                            Err(_) => {
+                                self.messages.push(DisplayMessage::Status {
+                                    text: format!(
+                                        "Invalid ordinal: {} — expected a number like #3",
+                                        raw
+                                    ),
+                                });
+                                return Ok(());
+                            }
+                        }
+                    }
+                };
+
+                // Locate the Nth user message in the display list.
+                let mut seen: usize = 0;
+                let mut idx: Option<usize> = None;
+                for (i, m) in self.messages.iter().enumerate() {
+                    if matches!(m, DisplayMessage::User { .. }) {
+                        seen += 1;
+                        if seen == n {
+                            idx = Some(i);
+                            break;
+                        }
+                    }
+                }
+                let Some(cut) = idx else {
+                    self.messages.push(DisplayMessage::Status {
+                        text: format!("No user message #{} to return to (latest is #{}).", n, seen),
+                    });
+                    return Ok(());
+                };
+
+                // Real (non-slash) user submissions strictly before the cutoff
+                // are the engine turns we must KEEP. Slash commands were never
+                // submitted to the engine, so they must not be counted here.
+                let real_users_kept: usize = self.messages[..cut]
+                    .iter()
+                    .filter(|m| {
+                        matches!(
+                            m,
+                            DisplayMessage::User { text } if !text.trim_start().starts_with('/')
+                        )
+                    })
+                    .count();
+
+                // Truncate the display transcript first (keep [0, cut)).
+                self.messages.truncate(cut);
+
+                // Truncate the engine's LLM history consistently: keep everything
+                // before the (real_users_kept + 1)-th genuine user-submission
+                // entry — a Message::User whose first content block is NOT a
+                // tool_result (a tool_result User message is an internal follow-up
+                // from the query loop, not a user turn boundary).
+                {
+                    let mut messages = self.engine.messages.lock().await;
+                    let drop_from = index_of_real_user_turn(&messages, real_users_kept + 1);
+                    messages.truncate(drop_from);
+                }
+
+                self.messages.push(DisplayMessage::Status {
+                    text: format!(
+                        "Rolled back before #{}; kept {} turn(s).",
+                        n, real_users_kept
+                    ),
+                });
+                self.save_session();
+                self.cost = self.engine.cost_tracker.lock().unwrap().format_cost();
+                return Ok(());
+            }
             "/clear" => {
                 self.engine.messages.lock().await.clear();
                 self.messages.clear();
@@ -985,7 +1152,10 @@ impl App {
             _ => {}
         }
 
-        // For other commands, use the existing handler
+        // For other commands, use the existing handler. commands.rs writes its
+        // output via `eprintlf!` into a capture buffer (never raw stderr, which
+        // would corrupt the ratatui alternate screen); we drain it below.
+        crate::commands::clear_command_output();
         let result = crate::commands::handle_command(
             input,
             &mut self.engine,
@@ -1009,13 +1179,20 @@ impl App {
                     message: "Thinking...".to_string(),
                     active: true,
                     started_at: Some(Instant::now()),
-                    verb_index: (self.tick_count as usize + self.messages.len()) % SPINNER_VERBS.len(),
+                    verb_index: (self.tick_count as usize + self.messages.len())
+                        % SPINNER_VERBS.len(),
                 };
             }
             crate::commands::CommandResult::ToggleVim => {
                 // TODO: vim mode in TUI
             }
             crate::commands::CommandResult::Continue => {}
+        }
+
+        // Route captured command output (eprintlf! lines from commands.rs) into
+        // the transcript as Status rows instead of letting them tear the frame.
+        for line in crate::commands::drain_command_output() {
+            self.messages.push(DisplayMessage::Status { text: line });
         }
 
         self.save_session();
@@ -1093,7 +1270,13 @@ impl App {
 
     /// Get current effort level label.
     pub fn get_effort_label(&self) -> &str {
-        match self.engine.settings.thinking.as_ref().and_then(|t| t.budget_tokens) {
+        match self
+            .engine
+            .settings
+            .thinking
+            .as_ref()
+            .and_then(|t| t.budget_tokens)
+        {
             Some(0..=1024) => "low",
             Some(1025..=4096) => "medium",
             Some(4097..=10000) => "high",
@@ -1134,49 +1317,181 @@ impl App {
         let effort_label = self.get_effort_label().to_string();
 
         if let Some(ref mut picker) = self.picker {
-            let tab_idx = picker.tab_state.as_ref().map(|t| t.selected_tab).unwrap_or(0);
+            let tab_idx = picker
+                .tab_state
+                .as_ref()
+                .map(|t| t.selected_tab)
+                .unwrap_or(0);
 
             match &picker.source {
                 PickerSource::Help => {
                     picker.items = if tab_idx == 0 {
                         // General tab
                         vec![
-                            PickerItem { label: "Ctrl+C (x2)".into(), description: "Exit Venus".into(), value: "".into() },
-                            PickerItem { label: "Ctrl+D".into(), description: "Exit Venus".into(), value: "".into() },
-                            PickerItem { label: "Ctrl+L".into(), description: "Redraw screen".into(), value: "".into() },
-                            PickerItem { label: "Ctrl+R".into(), description: "Search history".into(), value: "".into() },
-                            PickerItem { label: "Ctrl+K".into(), description: "Delete to end of line".into(), value: "".into() },
-                            PickerItem { label: "Ctrl+U".into(), description: "Delete to start of line".into(), value: "".into() },
-                            PickerItem { label: "Ctrl+W".into(), description: "Delete word backward".into(), value: "".into() },
-                            PickerItem { label: "Ctrl+G".into(), description: "Open external editor".into(), value: "".into() },
-                            PickerItem { label: "Ctrl+S".into(), description: "Stash prompt".into(), value: "".into() },
-                            PickerItem { label: "Ctrl+Home/End".into(), description: "Scroll to top/bottom".into(), value: "".into() },
-                            PickerItem { label: "Alt+P".into(), description: "Model picker".into(), value: "".into() },
-                            PickerItem { label: "Alt+T".into(), description: "Toggle thinking".into(), value: "".into() },
-                            PickerItem { label: "Alt+O".into(), description: "Toggle fast mode".into(), value: "".into() },
-                            PickerItem { label: "Shift+Tab".into(), description: "Cycle permission mode".into(), value: "".into() },
-                            PickerItem { label: "Ctrl+Shift+P".into(), description: "Command palette".into(), value: "".into() },
+                            PickerItem {
+                                label: "Ctrl+C (x2)".into(),
+                                description: "Exit Venus".into(),
+                                value: "".into(),
+                            },
+                            PickerItem {
+                                label: "Ctrl+D".into(),
+                                description: "Exit Venus".into(),
+                                value: "".into(),
+                            },
+                            PickerItem {
+                                label: "Ctrl+L".into(),
+                                description: "Redraw screen".into(),
+                                value: "".into(),
+                            },
+                            PickerItem {
+                                label: "Ctrl+R".into(),
+                                description: "Search history".into(),
+                                value: "".into(),
+                            },
+                            PickerItem {
+                                label: "Ctrl+K".into(),
+                                description: "Delete to end of line".into(),
+                                value: "".into(),
+                            },
+                            PickerItem {
+                                label: "Ctrl+U".into(),
+                                description: "Delete to start of line".into(),
+                                value: "".into(),
+                            },
+                            PickerItem {
+                                label: "Ctrl+W".into(),
+                                description: "Delete word backward".into(),
+                                value: "".into(),
+                            },
+                            PickerItem {
+                                label: "Ctrl+G".into(),
+                                description: "Open external editor".into(),
+                                value: "".into(),
+                            },
+                            PickerItem {
+                                label: "Ctrl+S".into(),
+                                description: "Stash prompt".into(),
+                                value: "".into(),
+                            },
+                            PickerItem {
+                                label: "Ctrl+Home/End".into(),
+                                description: "Scroll to top/bottom".into(),
+                                value: "".into(),
+                            },
+                            PickerItem {
+                                label: "Alt+P".into(),
+                                description: "Model picker".into(),
+                                value: "".into(),
+                            },
+                            PickerItem {
+                                label: "Alt+T".into(),
+                                description: "Toggle thinking".into(),
+                                value: "".into(),
+                            },
+                            PickerItem {
+                                label: "Alt+O".into(),
+                                description: "Toggle fast mode".into(),
+                                value: "".into(),
+                            },
+                            PickerItem {
+                                label: "Shift+Tab".into(),
+                                description: "Cycle permission mode".into(),
+                                value: "".into(),
+                            },
+                            PickerItem {
+                                label: "Ctrl+Shift+P".into(),
+                                description: "Command palette".into(),
+                                value: "".into(),
+                            },
                         ]
                     } else {
                         // Commands tab
                         vec![
-                            PickerItem { label: "/help".into(), description: "Show this help".into(), value: "/help".into() },
-                            PickerItem { label: "/clear".into(), description: "Clear conversation".into(), value: "/clear".into() },
-                            PickerItem { label: "/cost".into(), description: "Show token usage".into(), value: "/cost".into() },
-                            PickerItem { label: "/model".into(), description: "Show or change model".into(), value: "/model".into() },
-                            PickerItem { label: "/status".into(), description: "Show session status".into(), value: "/status".into() },
-                            PickerItem { label: "/compact".into(), description: "Compact conversation".into(), value: "/compact".into() },
-                            PickerItem { label: "/diff".into(), description: "Show git diff".into(), value: "/diff".into() },
-                            PickerItem { label: "/commit".into(), description: "Generate commit message".into(), value: "/commit".into() },
-                            PickerItem { label: "/review".into(), description: "Review code changes".into(), value: "/review".into() },
-                            PickerItem { label: "/sessions".into(), description: "List saved sessions".into(), value: "/sessions".into() },
-                            PickerItem { label: "/resume".into(), description: "Resume a session".into(), value: "/resume".into() },
-                            PickerItem { label: "/fast".into(), description: "Toggle fast mode".into(), value: "/fast".into() },
-                            PickerItem { label: "/permissions".into(), description: "Permission mode".into(), value: "/permissions".into() },
-                            PickerItem { label: "/config".into(), description: "Show configuration".into(), value: "/config".into() },
-                            PickerItem { label: "/theme".into(), description: "Set terminal theme".into(), value: "/theme".into() },
-                            PickerItem { label: "/effort".into(), description: "Set effort level".into(), value: "/effort".into() },
-                            PickerItem { label: "/quit".into(), description: "Exit Venus".into(), value: "/quit".into() },
+                            PickerItem {
+                                label: "/help".into(),
+                                description: "Show this help".into(),
+                                value: "/help".into(),
+                            },
+                            PickerItem {
+                                label: "/clear".into(),
+                                description: "Clear conversation".into(),
+                                value: "/clear".into(),
+                            },
+                            PickerItem {
+                                label: "/cost".into(),
+                                description: "Show token usage".into(),
+                                value: "/cost".into(),
+                            },
+                            PickerItem {
+                                label: "/model".into(),
+                                description: "Show or change model".into(),
+                                value: "/model".into(),
+                            },
+                            PickerItem {
+                                label: "/status".into(),
+                                description: "Show session status".into(),
+                                value: "/status".into(),
+                            },
+                            PickerItem {
+                                label: "/compact".into(),
+                                description: "Compact conversation".into(),
+                                value: "/compact".into(),
+                            },
+                            PickerItem {
+                                label: "/diff".into(),
+                                description: "Show git diff".into(),
+                                value: "/diff".into(),
+                            },
+                            PickerItem {
+                                label: "/commit".into(),
+                                description: "Generate commit message".into(),
+                                value: "/commit".into(),
+                            },
+                            PickerItem {
+                                label: "/review".into(),
+                                description: "Review code changes".into(),
+                                value: "/review".into(),
+                            },
+                            PickerItem {
+                                label: "/sessions".into(),
+                                description: "List saved sessions".into(),
+                                value: "/sessions".into(),
+                            },
+                            PickerItem {
+                                label: "/resume".into(),
+                                description: "Resume a session".into(),
+                                value: "/resume".into(),
+                            },
+                            PickerItem {
+                                label: "/fast".into(),
+                                description: "Toggle fast mode".into(),
+                                value: "/fast".into(),
+                            },
+                            PickerItem {
+                                label: "/permissions".into(),
+                                description: "Permission mode".into(),
+                                value: "/permissions".into(),
+                            },
+                            PickerItem {
+                                label: "/config".into(),
+                                description: "Show configuration".into(),
+                                value: "/config".into(),
+                            },
+                            PickerItem {
+                                label: "/theme".into(),
+                                description: "Set terminal theme".into(),
+                                value: "/theme".into(),
+                            },
+                            PickerItem {
+                                label: "/effort".into(),
+                                description: "Set effort level".into(),
+                                value: "/effort".into(),
+                            },
+                            PickerItem {
+                                label: "/quit".into(),
+                                description: "Exit Venus".into(),
+                                value: "/quit".into(),
+                            },
                         ]
                     };
                     picker.selected = 0;
@@ -1189,7 +1504,11 @@ impl App {
                             vec![
                                 PickerItem {
                                     label: "Session".into(),
-                                    description: format!("ID: {}", &self.engine.session_id[..8.min(self.engine.session_id.len())]),
+                                    description: format!(
+                                        "ID: {}",
+                                        &self.engine.session_id
+                                            [..8.min(self.engine.session_id.len())]
+                                    ),
                                     value: "".into(),
                                 },
                                 PickerItem {
@@ -1204,12 +1523,24 @@ impl App {
                                 },
                                 PickerItem {
                                     label: "Messages".into(),
-                                    description: format!("{}", self.engine.messages.try_lock().map(|m| m.len()).unwrap_or(0)),
+                                    description: format!(
+                                        "{}",
+                                        self.engine
+                                            .messages
+                                            .try_lock()
+                                            .map(|m| m.len())
+                                            .unwrap_or(0)
+                                    ),
                                     value: "".into(),
                                 },
                                 PickerItem {
                                     label: "Cost".into(),
-                                    description: self.engine.cost_tracker.lock().unwrap().format_cost(),
+                                    description: self
+                                        .engine
+                                        .cost_tracker
+                                        .lock()
+                                        .unwrap()
+                                        .format_cost(),
                                     value: "".into(),
                                 },
                             ]
@@ -1229,14 +1560,27 @@ impl App {
                                 },
                                 PickerItem {
                                     label: "Permission Mode".into(),
-                                    description: format!("Current: {}", self.engine.settings.permission_mode.as_deref().unwrap_or("default")),
+                                    description: format!(
+                                        "Current: {}",
+                                        self.engine
+                                            .settings
+                                            .permission_mode
+                                            .as_deref()
+                                            .unwrap_or("default")
+                                    ),
                                     value: "permissions".into(),
                                 },
                                 PickerItem {
                                     label: "Thinking Mode".into(),
-                                    description: format!("Current: {}", self.engine.settings.thinking.as_ref()
-                                        .and_then(|t| t.mode.as_deref())
-                                        .unwrap_or("disabled")),
+                                    description: format!(
+                                        "Current: {}",
+                                        self.engine
+                                            .settings
+                                            .thinking
+                                            .as_ref()
+                                            .and_then(|t| t.mode.as_deref())
+                                            .unwrap_or("disabled")
+                                    ),
                                     value: "thinking".into(),
                                 },
                                 PickerItem {
@@ -1279,7 +1623,12 @@ impl App {
 
     /// Cycle effort level in the model picker.
     fn cycle_effort(&mut self, direction: i32) {
-        let current_budget = self.engine.settings.thinking.as_ref().and_then(|t| t.budget_tokens);
+        let current_budget = self
+            .engine
+            .settings
+            .thinking
+            .as_ref()
+            .and_then(|t| t.budget_tokens);
         let current_label = match current_budget {
             Some(0..=1024) => "low",
             Some(1025..=4096) => "medium",
@@ -1306,7 +1655,12 @@ impl App {
             "max" => Some(32000),
             _ => None,
         };
-        let existing_mode = self.engine.settings.thinking.as_ref().and_then(|t| t.mode.clone());
+        let existing_mode = self
+            .engine
+            .settings
+            .thinking
+            .as_ref()
+            .and_then(|t| t.mode.clone());
         self.engine.settings = Arc::new({
             let mut s = (*self.engine.settings).clone();
             s.thinking = Some(ThinkingConfig {
@@ -1335,18 +1689,28 @@ impl App {
                 });
             }
             Ok(sessions) => {
-                let items: Vec<PickerItem> = sessions.iter().map(|s| {
-                    let time = chrono::DateTime::from_timestamp(s.updated_at as i64, 0)
-                        .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
-                        .unwrap_or_else(|| "unknown".to_string());
-                    let name = s.name.as_deref().unwrap_or(&s.id[..8.min(s.id.len())]);
-                    PickerItem {
-                        label: name.to_string(),
-                        description: format!("{} msgs | {} | {}", s.message_count, s.model, time),
-                        value: s.id.clone(),
-                    }
-                }).collect();
-                let picker = PickerState::new("Resume Session".into(), items, PickerSource::Resume(sessions));
+                let items: Vec<PickerItem> = sessions
+                    .iter()
+                    .map(|s| {
+                        let time = chrono::DateTime::from_timestamp(s.updated_at as i64, 0)
+                            .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
+                            .unwrap_or_else(|| "unknown".to_string());
+                        let name = s.name.as_deref().unwrap_or(&s.id[..8.min(s.id.len())]);
+                        PickerItem {
+                            label: name.to_string(),
+                            description: format!(
+                                "{} msgs | {} | {}",
+                                s.message_count, s.model, time
+                            ),
+                            value: s.id.clone(),
+                        }
+                    })
+                    .collect();
+                let picker = PickerState::new(
+                    "Resume Session".into(),
+                    items,
+                    PickerSource::Resume(sessions),
+                );
                 self.picker = Some(picker);
                 self.input_mode = InputMode::Picker;
             }
@@ -1361,9 +1725,21 @@ impl App {
     /// Open the theme picker.
     fn open_theme_picker(&mut self) {
         let themes = vec![
-            PickerItem { label: "dark".into(), description: "Dark theme (default)".into(), value: "dark".into() },
-            PickerItem { label: "light".into(), description: "Light theme".into(), value: "light".into() },
-            PickerItem { label: "auto".into(), description: "Auto-detect from terminal".into(), value: "auto".into() },
+            PickerItem {
+                label: "dark".into(),
+                description: "Dark theme (default)".into(),
+                value: "dark".into(),
+            },
+            PickerItem {
+                label: "light".into(),
+                description: "Light theme".into(),
+                value: "light".into(),
+            },
+            PickerItem {
+                label: "auto".into(),
+                description: "Auto-detect from terminal".into(),
+                value: "auto".into(),
+            },
         ];
         let current = &self.engine.theme;
         let mut picker = PickerState::new("Select Theme".into(), themes, PickerSource::Theme);
@@ -1377,12 +1753,30 @@ impl App {
     /// Open the permissions mode picker.
     fn open_permissions_picker(&mut self) {
         let modes = vec![
-            PickerItem { label: "default".into(), description: "Ask for permission on risky operations".into(), value: "default".into() },
-            PickerItem { label: "auto".into(), description: "Auto-approve most operations".into(), value: "auto".into() },
-            PickerItem { label: "bypass".into(), description: "Skip all permission checks (dangerous)".into(), value: "bypass".into() },
+            PickerItem {
+                label: "default".into(),
+                description: "Ask for permission on risky operations".into(),
+                value: "default".into(),
+            },
+            PickerItem {
+                label: "auto".into(),
+                description: "Auto-approve most operations".into(),
+                value: "auto".into(),
+            },
+            PickerItem {
+                label: "bypass".into(),
+                description: "Skip all permission checks (dangerous)".into(),
+                value: "bypass".into(),
+            },
         ];
-        let current = self.engine.settings.permission_mode.as_deref().unwrap_or("default");
-        let mut picker = PickerState::new("Permission Mode".into(), modes, PickerSource::Permissions);
+        let current = self
+            .engine
+            .settings
+            .permission_mode
+            .as_deref()
+            .unwrap_or("default");
+        let mut picker =
+            PickerState::new("Permission Mode".into(), modes, PickerSource::Permissions);
         if let Some(idx) = picker.items.iter().position(|i| i.value == current) {
             picker.selected = idx;
         }
@@ -1392,7 +1786,11 @@ impl App {
 
     /// Open the effort level picker.
     fn open_effort_picker(&mut self) {
-        let current_effort = self.engine.settings.thinking.as_ref()
+        let current_effort = self
+            .engine
+            .settings
+            .thinking
+            .as_ref()
             .and_then(|t| t.budget_tokens)
             .map(|b| match b {
                 0..=1024 => "low",
@@ -1403,10 +1801,26 @@ impl App {
             .unwrap_or("medium");
 
         let items = vec![
-            PickerItem { label: "low".into(), description: "Minimal thinking, fastest response".into(), value: "low".into() },
-            PickerItem { label: "medium".into(), description: "Balanced thinking".into(), value: "medium".into() },
-            PickerItem { label: "high".into(), description: "More thorough thinking".into(), value: "high".into() },
-            PickerItem { label: "max".into(), description: "Maximum thinking depth".into(), value: "max".into() },
+            PickerItem {
+                label: "low".into(),
+                description: "Minimal thinking, fastest response".into(),
+                value: "low".into(),
+            },
+            PickerItem {
+                label: "medium".into(),
+                description: "Balanced thinking".into(),
+                value: "medium".into(),
+            },
+            PickerItem {
+                label: "high".into(),
+                description: "More thorough thinking".into(),
+                value: "high".into(),
+            },
+            PickerItem {
+                label: "max".into(),
+                description: "Maximum thinking depth".into(),
+                value: "max".into(),
+            },
         ];
         let mut picker = PickerState::new("Effort Level".into(), items, PickerSource::Effort);
         if let Some(idx) = picker.items.iter().position(|i| i.value == current_effort) {
@@ -1422,7 +1836,10 @@ impl App {
         let status_items = vec![
             PickerItem {
                 label: "Session".into(),
-                description: format!("ID: {}", &self.engine.session_id[..8.min(self.engine.session_id.len())]),
+                description: format!(
+                    "ID: {}",
+                    &self.engine.session_id[..8.min(self.engine.session_id.len())]
+                ),
                 value: "".into(),
             },
             PickerItem {
@@ -1437,7 +1854,14 @@ impl App {
             },
             PickerItem {
                 label: "Messages".into(),
-                description: format!("{}", self.engine.messages.try_lock().map(|m| m.len()).unwrap_or(0)),
+                description: format!(
+                    "{}",
+                    self.engine
+                        .messages
+                        .try_lock()
+                        .map(|m| m.len())
+                        .unwrap_or(0)
+                ),
                 value: "".into(),
             },
             PickerItem {
@@ -1461,14 +1885,27 @@ impl App {
             },
             PickerItem {
                 label: "Permission Mode".into(),
-                description: format!("Current: {}", self.engine.settings.permission_mode.as_deref().unwrap_or("default")),
+                description: format!(
+                    "Current: {}",
+                    self.engine
+                        .settings
+                        .permission_mode
+                        .as_deref()
+                        .unwrap_or("default")
+                ),
                 value: "permissions".into(),
             },
             PickerItem {
                 label: "Thinking Mode".into(),
-                description: format!("Current: {}", self.engine.settings.thinking.as_ref()
-                    .and_then(|t| t.mode.as_deref())
-                    .unwrap_or("disabled")),
+                description: format!(
+                    "Current: {}",
+                    self.engine
+                        .settings
+                        .thinking
+                        .as_ref()
+                        .and_then(|t| t.mode.as_deref())
+                        .unwrap_or("disabled")
+                ),
                 value: "thinking".into(),
             },
             PickerItem {
@@ -1499,9 +1936,13 @@ impl App {
         ];
         drop(tracker);
 
-        let tabs = vec!["Status".to_string(), "Config".to_string(), "Usage".to_string()];
-        let picker = PickerState::new("Settings".into(), status_items, PickerSource::Config)
-            .with_tabs(tabs);
+        let tabs = vec![
+            "Status".to_string(),
+            "Config".to_string(),
+            "Usage".to_string(),
+        ];
+        let picker =
+            PickerState::new("Settings".into(), status_items, PickerSource::Config).with_tabs(tabs);
         self.picker = Some(picker);
         self.input_mode = InputMode::Picker;
     }
@@ -1511,56 +1952,156 @@ impl App {
         let (title, items, source) = match setting {
             "model" => {
                 let models = vec![
-                    PickerItem { label: "claude-opus-4-20250514".into(), description: "Most capable".into(), value: "claude-opus-4-20250514".into() },
-                    PickerItem { label: "claude-sonnet-4-20250514".into(), description: "Balanced".into(), value: "claude-sonnet-4-20250514".into() },
-                    PickerItem { label: "claude-haiku-4-5-20251001".into(), description: "Fastest".into(), value: "claude-haiku-4-5-20251001".into() },
+                    PickerItem {
+                        label: "claude-opus-4-20250514".into(),
+                        description: "Most capable".into(),
+                        value: "claude-opus-4-20250514".into(),
+                    },
+                    PickerItem {
+                        label: "claude-sonnet-4-20250514".into(),
+                        description: "Balanced".into(),
+                        value: "claude-sonnet-4-20250514".into(),
+                    },
+                    PickerItem {
+                        label: "claude-haiku-4-5-20251001".into(),
+                        description: "Fastest".into(),
+                        value: "claude-haiku-4-5-20251001".into(),
+                    },
                 ];
                 ("Select Model".into(), models, PickerSource::Model)
             }
             "theme" => {
                 let themes = vec![
-                    PickerItem { label: "dark".into(), description: "Dark theme".into(), value: "dark".into() },
-                    PickerItem { label: "light".into(), description: "Light theme".into(), value: "light".into() },
-                    PickerItem { label: "auto".into(), description: "Auto-detect".into(), value: "auto".into() },
+                    PickerItem {
+                        label: "dark".into(),
+                        description: "Dark theme".into(),
+                        value: "dark".into(),
+                    },
+                    PickerItem {
+                        label: "light".into(),
+                        description: "Light theme".into(),
+                        value: "light".into(),
+                    },
+                    PickerItem {
+                        label: "auto".into(),
+                        description: "Auto-detect".into(),
+                        value: "auto".into(),
+                    },
                 ];
                 ("Select Theme".into(), themes, PickerSource::Theme)
             }
             "permissions" => {
                 let modes = vec![
-                    PickerItem { label: "default".into(), description: "Ask for risky ops".into(), value: "default".into() },
-                    PickerItem { label: "auto".into(), description: "Auto-approve most".into(), value: "auto".into() },
-                    PickerItem { label: "bypass".into(), description: "Skip all checks".into(), value: "bypass".into() },
+                    PickerItem {
+                        label: "default".into(),
+                        description: "Ask for risky ops".into(),
+                        value: "default".into(),
+                    },
+                    PickerItem {
+                        label: "auto".into(),
+                        description: "Auto-approve most".into(),
+                        value: "auto".into(),
+                    },
+                    PickerItem {
+                        label: "bypass".into(),
+                        description: "Skip all checks".into(),
+                        value: "bypass".into(),
+                    },
                 ];
                 ("Permission Mode".into(), modes, PickerSource::Permissions)
             }
             "thinking" => {
                 let modes = vec![
-                    PickerItem { label: "disabled".into(), description: "No thinking".into(), value: "disabled".into() },
-                    PickerItem { label: "enabled".into(), description: "Always think".into(), value: "enabled".into() },
-                    PickerItem { label: "adaptive".into(), description: "Think when needed".into(), value: "adaptive".into() },
+                    PickerItem {
+                        label: "disabled".into(),
+                        description: "No thinking".into(),
+                        value: "disabled".into(),
+                    },
+                    PickerItem {
+                        label: "enabled".into(),
+                        description: "Always think".into(),
+                        value: "enabled".into(),
+                    },
+                    PickerItem {
+                        label: "adaptive".into(),
+                        description: "Think when needed".into(),
+                        value: "adaptive".into(),
+                    },
                 ];
-                ("Thinking Mode".into(), modes, PickerSource::ConfigSub("thinking".into()))
+                (
+                    "Thinking Mode".into(),
+                    modes,
+                    PickerSource::ConfigSub("thinking".into()),
+                )
             }
             "effort" => {
                 let levels = vec![
-                    PickerItem { label: "low".into(), description: "Minimal thinking".into(), value: "low".into() },
-                    PickerItem { label: "medium".into(), description: "Balanced".into(), value: "medium".into() },
-                    PickerItem { label: "high".into(), description: "More thorough".into(), value: "high".into() },
-                    PickerItem { label: "max".into(), description: "Maximum depth".into(), value: "max".into() },
+                    PickerItem {
+                        label: "low".into(),
+                        description: "Minimal thinking".into(),
+                        value: "low".into(),
+                    },
+                    PickerItem {
+                        label: "medium".into(),
+                        description: "Balanced".into(),
+                        value: "medium".into(),
+                    },
+                    PickerItem {
+                        label: "high".into(),
+                        description: "More thorough".into(),
+                        value: "high".into(),
+                    },
+                    PickerItem {
+                        label: "max".into(),
+                        description: "Maximum depth".into(),
+                        value: "max".into(),
+                    },
                 ];
                 ("Effort Level".into(), levels, PickerSource::Effort)
             }
             "color" => {
                 let colors = vec![
-                    PickerItem { label: "blue".into(), description: "".into(), value: "blue".into() },
-                    PickerItem { label: "green".into(), description: "".into(), value: "green".into() },
-                    PickerItem { label: "cyan".into(), description: "".into(), value: "cyan".into() },
-                    PickerItem { label: "yellow".into(), description: "".into(), value: "yellow".into() },
-                    PickerItem { label: "red".into(), description: "".into(), value: "red".into() },
-                    PickerItem { label: "magenta".into(), description: "".into(), value: "magenta".into() },
-                    PickerItem { label: "white".into(), description: "".into(), value: "white".into() },
+                    PickerItem {
+                        label: "blue".into(),
+                        description: "".into(),
+                        value: "blue".into(),
+                    },
+                    PickerItem {
+                        label: "green".into(),
+                        description: "".into(),
+                        value: "green".into(),
+                    },
+                    PickerItem {
+                        label: "cyan".into(),
+                        description: "".into(),
+                        value: "cyan".into(),
+                    },
+                    PickerItem {
+                        label: "yellow".into(),
+                        description: "".into(),
+                        value: "yellow".into(),
+                    },
+                    PickerItem {
+                        label: "red".into(),
+                        description: "".into(),
+                        value: "red".into(),
+                    },
+                    PickerItem {
+                        label: "magenta".into(),
+                        description: "".into(),
+                        value: "magenta".into(),
+                    },
+                    PickerItem {
+                        label: "white".into(),
+                        description: "".into(),
+                        value: "white".into(),
+                    },
                 ];
-                ("Prompt Color".into(), colors, PickerSource::ConfigSub("color".into()))
+                (
+                    "Prompt Color".into(),
+                    colors,
+                    PickerSource::ConfigSub("color".into()),
+                )
             }
             _ => return,
         };
@@ -1570,8 +2111,17 @@ impl App {
         let current = match setting {
             "model" => self.engine.model.clone(),
             "theme" => self.engine.theme.clone(),
-            "permissions" => self.engine.settings.permission_mode.clone().unwrap_or_default(),
-            "thinking" => self.engine.settings.thinking.as_ref()
+            "permissions" => self
+                .engine
+                .settings
+                .permission_mode
+                .clone()
+                .unwrap_or_default(),
+            "thinking" => self
+                .engine
+                .settings
+                .thinking
+                .as_ref()
                 .and_then(|t| t.mode.clone())
                 .unwrap_or_default(),
             "effort" => self.get_effort_label().to_string(),
@@ -1622,7 +2172,11 @@ impl App {
             });
             for line in staged.lines().take(100) {
                 let (label, desc) = (line.to_string(), String::new());
-                items.push(PickerItem { label, description: desc, value: String::new() });
+                items.push(PickerItem {
+                    label,
+                    description: desc,
+                    value: String::new(),
+                });
             }
         }
 
@@ -1649,7 +2203,9 @@ impl App {
 
     /// Open the skills picker.
     fn open_skills_picker(&mut self) {
-        let skills = self.skill_registry.as_ref()
+        let skills = self
+            .skill_registry
+            .as_ref()
             .map(|r| r.all())
             .unwrap_or_default();
 
@@ -1660,13 +2216,14 @@ impl App {
             return;
         }
 
-        let items: Vec<PickerItem> = skills.iter().map(|s| {
-            PickerItem {
+        let items: Vec<PickerItem> = skills
+            .iter()
+            .map(|s| PickerItem {
                 label: format!("/{}", s.name),
                 description: s.description.clone(),
                 value: s.name.clone(),
-            }
-        }).collect();
+            })
+            .collect();
 
         let picker = PickerState::new("Skills".into(), items, PickerSource::Skills(Vec::new()));
         self.picker = Some(picker);
@@ -1677,42 +2234,170 @@ impl App {
     fn open_help_picker(&mut self) {
         // General tab items
         let general_items = vec![
-            PickerItem { label: "Ctrl+C (x2)".into(), description: "Exit Venus".into(), value: "".into() },
-            PickerItem { label: "Ctrl+D".into(), description: "Exit Venus".into(), value: "".into() },
-            PickerItem { label: "Ctrl+L".into(), description: "Redraw screen".into(), value: "".into() },
-            PickerItem { label: "Ctrl+R".into(), description: "Search history".into(), value: "".into() },
-            PickerItem { label: "Ctrl+K".into(), description: "Delete to end of line".into(), value: "".into() },
-            PickerItem { label: "Ctrl+U".into(), description: "Delete to start of line".into(), value: "".into() },
-            PickerItem { label: "Ctrl+W".into(), description: "Delete word backward".into(), value: "".into() },
-            PickerItem { label: "Ctrl+G".into(), description: "Open external editor".into(), value: "".into() },
-            PickerItem { label: "Ctrl+S".into(), description: "Stash prompt".into(), value: "".into() },
-            PickerItem { label: "Ctrl+Home/End".into(), description: "Scroll to top/bottom".into(), value: "".into() },
-            PickerItem { label: "Alt+P".into(), description: "Model picker".into(), value: "".into() },
-            PickerItem { label: "Alt+T".into(), description: "Toggle thinking".into(), value: "".into() },
-            PickerItem { label: "Alt+O".into(), description: "Toggle fast mode".into(), value: "".into() },
-            PickerItem { label: "Shift+Tab".into(), description: "Cycle permission mode".into(), value: "".into() },
-            PickerItem { label: "Ctrl+Shift+P".into(), description: "Command palette".into(), value: "".into() },
+            PickerItem {
+                label: "Ctrl+C (x2)".into(),
+                description: "Exit Venus".into(),
+                value: "".into(),
+            },
+            PickerItem {
+                label: "Ctrl+D".into(),
+                description: "Exit Venus".into(),
+                value: "".into(),
+            },
+            PickerItem {
+                label: "Ctrl+L".into(),
+                description: "Redraw screen".into(),
+                value: "".into(),
+            },
+            PickerItem {
+                label: "Ctrl+R".into(),
+                description: "Search history".into(),
+                value: "".into(),
+            },
+            PickerItem {
+                label: "Ctrl+K".into(),
+                description: "Delete to end of line".into(),
+                value: "".into(),
+            },
+            PickerItem {
+                label: "Ctrl+U".into(),
+                description: "Delete to start of line".into(),
+                value: "".into(),
+            },
+            PickerItem {
+                label: "Ctrl+W".into(),
+                description: "Delete word backward".into(),
+                value: "".into(),
+            },
+            PickerItem {
+                label: "Ctrl+G".into(),
+                description: "Open external editor".into(),
+                value: "".into(),
+            },
+            PickerItem {
+                label: "Ctrl+S".into(),
+                description: "Stash prompt".into(),
+                value: "".into(),
+            },
+            PickerItem {
+                label: "Ctrl+Home/End".into(),
+                description: "Scroll to top/bottom".into(),
+                value: "".into(),
+            },
+            PickerItem {
+                label: "Alt+P".into(),
+                description: "Model picker".into(),
+                value: "".into(),
+            },
+            PickerItem {
+                label: "Alt+T".into(),
+                description: "Toggle thinking".into(),
+                value: "".into(),
+            },
+            PickerItem {
+                label: "Alt+O".into(),
+                description: "Toggle fast mode".into(),
+                value: "".into(),
+            },
+            PickerItem {
+                label: "Shift+Tab".into(),
+                description: "Cycle permission mode".into(),
+                value: "".into(),
+            },
+            PickerItem {
+                label: "Ctrl+Shift+P".into(),
+                description: "Command palette".into(),
+                value: "".into(),
+            },
         ];
 
         // Commands tab items
         let _command_items = vec![
-            PickerItem { label: "/help".into(), description: "Show this help".into(), value: "/help".into() },
-            PickerItem { label: "/clear".into(), description: "Clear conversation".into(), value: "/clear".into() },
-            PickerItem { label: "/cost".into(), description: "Show token usage".into(), value: "/cost".into() },
-            PickerItem { label: "/model".into(), description: "Show or change model".into(), value: "/model".into() },
-            PickerItem { label: "/status".into(), description: "Show session status".into(), value: "/status".into() },
-            PickerItem { label: "/compact".into(), description: "Compact conversation".into(), value: "/compact".into() },
-            PickerItem { label: "/diff".into(), description: "Show git diff".into(), value: "/diff".into() },
-            PickerItem { label: "/commit".into(), description: "Generate commit message".into(), value: "/commit".into() },
-            PickerItem { label: "/review".into(), description: "Review code changes".into(), value: "/review".into() },
-            PickerItem { label: "/sessions".into(), description: "List saved sessions".into(), value: "/sessions".into() },
-            PickerItem { label: "/resume".into(), description: "Resume a session".into(), value: "/resume".into() },
-            PickerItem { label: "/fast".into(), description: "Toggle fast mode".into(), value: "/fast".into() },
-            PickerItem { label: "/permissions".into(), description: "Permission mode".into(), value: "/permissions".into() },
-            PickerItem { label: "/config".into(), description: "Show configuration".into(), value: "/config".into() },
-            PickerItem { label: "/theme".into(), description: "Set terminal theme".into(), value: "/theme".into() },
-            PickerItem { label: "/effort".into(), description: "Set effort level".into(), value: "/effort".into() },
-            PickerItem { label: "/quit".into(), description: "Exit Venus".into(), value: "/quit".into() },
+            PickerItem {
+                label: "/help".into(),
+                description: "Show this help".into(),
+                value: "/help".into(),
+            },
+            PickerItem {
+                label: "/clear".into(),
+                description: "Clear conversation".into(),
+                value: "/clear".into(),
+            },
+            PickerItem {
+                label: "/cost".into(),
+                description: "Show token usage".into(),
+                value: "/cost".into(),
+            },
+            PickerItem {
+                label: "/model".into(),
+                description: "Show or change model".into(),
+                value: "/model".into(),
+            },
+            PickerItem {
+                label: "/status".into(),
+                description: "Show session status".into(),
+                value: "/status".into(),
+            },
+            PickerItem {
+                label: "/compact".into(),
+                description: "Compact conversation".into(),
+                value: "/compact".into(),
+            },
+            PickerItem {
+                label: "/diff".into(),
+                description: "Show git diff".into(),
+                value: "/diff".into(),
+            },
+            PickerItem {
+                label: "/commit".into(),
+                description: "Generate commit message".into(),
+                value: "/commit".into(),
+            },
+            PickerItem {
+                label: "/review".into(),
+                description: "Review code changes".into(),
+                value: "/review".into(),
+            },
+            PickerItem {
+                label: "/sessions".into(),
+                description: "List saved sessions".into(),
+                value: "/sessions".into(),
+            },
+            PickerItem {
+                label: "/resume".into(),
+                description: "Resume a session".into(),
+                value: "/resume".into(),
+            },
+            PickerItem {
+                label: "/fast".into(),
+                description: "Toggle fast mode".into(),
+                value: "/fast".into(),
+            },
+            PickerItem {
+                label: "/permissions".into(),
+                description: "Permission mode".into(),
+                value: "/permissions".into(),
+            },
+            PickerItem {
+                label: "/config".into(),
+                description: "Show configuration".into(),
+                value: "/config".into(),
+            },
+            PickerItem {
+                label: "/theme".into(),
+                description: "Set terminal theme".into(),
+                value: "/theme".into(),
+            },
+            PickerItem {
+                label: "/effort".into(),
+                description: "Set effort level".into(),
+                value: "/effort".into(),
+            },
+            PickerItem {
+                label: "/quit".into(),
+                description: "Exit Venus".into(),
+                value: "/quit".into(),
+            },
         ];
 
         // Use general tab by default
@@ -1751,7 +2436,11 @@ impl App {
     /// Toggle thinking mode.
     fn toggle_thinking(&mut self) {
         use venus_utils::config::ThinkingConfig;
-        let current = self.engine.settings.thinking.as_ref()
+        let current = self
+            .engine
+            .settings
+            .thinking
+            .as_ref()
             .and_then(|t| t.mode.as_deref())
             .unwrap_or("disabled");
         let next = match current {
@@ -1836,7 +2525,11 @@ impl App {
                             // Rebuild display messages from loaded conversation
                             self.messages.clear();
                             self.messages.push(DisplayMessage::Status {
-                                text: format!("Resumed session {} ({} messages)", &meta.id[..8.min(meta.id.len())], msg_count),
+                                text: format!(
+                                    "Resumed session {} ({} messages)",
+                                    &meta.id[..8.min(meta.id.len())],
+                                    msg_count
+                                ),
                             });
                         }
                         Err(e) => {
@@ -1883,38 +2576,38 @@ impl App {
             }
             PickerSource::Skills(_) => {
                 // Skills picker invokes the selected skill
-                return self.handle_slash_command(&format!("/{}", selected.value)).await;
+                return self
+                    .handle_slash_command(&format!("/{}", selected.value))
+                    .await;
             }
             PickerSource::Config => {
                 // Config picker opens sub-picker for the selected setting
                 self.open_config_sub_picker(&selected.value);
                 return Ok(());
             }
-            PickerSource::ConfigSub(setting) => {
-                match setting.as_str() {
-                    "thinking" => {
-                        use venus_utils::config::ThinkingConfig;
-                        self.engine.settings = Arc::new({
-                            let mut s = (*self.engine.settings).clone();
-                            s.thinking = Some(ThinkingConfig {
-                                mode: Some(selected.value.clone()),
-                                budget_tokens: s.thinking.as_ref().and_then(|t| t.budget_tokens),
-                            });
-                            s
+            PickerSource::ConfigSub(setting) => match setting.as_str() {
+                "thinking" => {
+                    use venus_utils::config::ThinkingConfig;
+                    self.engine.settings = Arc::new({
+                        let mut s = (*self.engine.settings).clone();
+                        s.thinking = Some(ThinkingConfig {
+                            mode: Some(selected.value.clone()),
+                            budget_tokens: s.thinking.as_ref().and_then(|t| t.budget_tokens),
                         });
-                        self.messages.push(DisplayMessage::Status {
-                            text: format!("Thinking mode: {}", selected.value),
-                        });
-                    }
-                    "color" => {
-                        self.engine.prompt_color = selected.value.clone();
-                        self.messages.push(DisplayMessage::Status {
-                            text: format!("Prompt color: {}", selected.value),
-                        });
-                    }
-                    _ => {}
+                        s
+                    });
+                    self.messages.push(DisplayMessage::Status {
+                        text: format!("Thinking mode: {}", selected.value),
+                    });
                 }
-            }
+                "color" => {
+                    self.engine.prompt_color = selected.value.clone();
+                    self.messages.push(DisplayMessage::Status {
+                        text: format!("Prompt color: {}", selected.value),
+                    });
+                }
+                _ => {}
+            },
         }
 
         self.input_mode = InputMode::Normal;
@@ -1942,7 +2635,9 @@ impl App {
                     0
                 }
             })
-        }).join().unwrap_or(0);
+        })
+        .join()
+        .unwrap_or(0);
         self.context_pct = result;
     }
 
@@ -1976,9 +2671,7 @@ impl App {
         );
 
         // Run editor
-        let status = std::process::Command::new(&editor)
-            .arg(&temp_path)
-            .status();
+        let status = std::process::Command::new(&editor).arg(&temp_path).status();
 
         // Re-enter TUI mode
         let _ = crossterm::terminal::enable_raw_mode();
@@ -1989,22 +2682,20 @@ impl App {
         );
 
         match status {
-            Ok(s) if s.success() => {
-                match std::fs::read_to_string(&temp_path) {
-                    Ok(content) => {
-                        let trimmed = content.trim().to_string();
-                        if !trimmed.is_empty() {
-                            self.input.buffer = trimmed;
-                            self.input.cursor_pos = self.input.buffer.len();
-                        }
-                    }
-                    Err(e) => {
-                        self.messages.push(DisplayMessage::Error {
-                            text: format!("Failed to read editor output: {}", e),
-                        });
+            Ok(s) if s.success() => match std::fs::read_to_string(&temp_path) {
+                Ok(content) => {
+                    let trimmed = content.trim().to_string();
+                    if !trimmed.is_empty() {
+                        self.input.buffer = trimmed;
+                        self.input.cursor_pos = self.input.buffer.len();
                     }
                 }
-            }
+                Err(e) => {
+                    self.messages.push(DisplayMessage::Error {
+                        text: format!("Failed to read editor output: {}", e),
+                    });
+                }
+            },
             Ok(s) => {
                 self.messages.push(DisplayMessage::Status {
                     text: format!("Editor exited with status: {}", s),
@@ -2025,9 +2716,19 @@ impl App {
     pub fn history_search_matches(&self) -> Vec<&str> {
         let query = self.input.buffer.to_lowercase();
         if query.is_empty() {
-            return self.input.history.iter().rev().take(5).map(|s| s.as_str()).collect();
+            return self
+                .input
+                .history
+                .iter()
+                .rev()
+                .take(5)
+                .map(|s| s.as_str())
+                .collect();
         }
-        self.input.history.iter().rev()
+        self.input
+            .history
+            .iter()
+            .rev()
             .filter(|entry| entry.to_lowercase().contains(&query))
             .take(5)
             .map(|s| s.as_str())
@@ -2050,14 +2751,66 @@ impl App {
                 model: engine.model.clone(),
                 name: engine.session_name.clone(),
             };
-            let msg_values: Vec<serde_json::Value> =
-                messages.iter().filter_map(|m| serde_json::to_value(m).ok()).collect();
+            let msg_values: Vec<serde_json::Value> = messages
+                .iter()
+                .filter_map(|m| serde_json::to_value(m).ok())
+                .collect();
             drop(messages);
             if let Err(e) = session::save_session(&engine.session_id, &meta, &msg_values).await {
                 tracing::warn!("failed to save session: {}", e);
             }
         });
     }
+
+    /// Save the session **awaiting completion**. Used at CLI exit time so we
+    /// don't lose the final session file when the process tears down.
+    pub async fn save_session_blocking(&self) -> std::result::Result<(), anyhow::Error> {
+        let now = chrono::Utc::now().timestamp() as u64;
+        let engine = self.engine.clone();
+
+        let messages = engine.messages.lock().await;
+        let meta = SessionMeta {
+            id: engine.session_id.clone(),
+            project: engine.working_dir.display().to_string(),
+            created_at: engine.created_at,
+            updated_at: now,
+            message_count: messages.len(),
+            model: engine.model.clone(),
+            name: engine.session_name.clone(),
+        };
+        let msg_values: Vec<serde_json::Value> = messages
+            .iter()
+            .filter_map(|m| serde_json::to_value(m).ok())
+            .collect();
+        drop(messages);
+
+        session::save_session(&engine.session_id, &meta, &msg_values).await?;
+        Ok(())
+    }
+}
+
+/// Index (in `messages`) of the entry that begins the `target`-th genuine
+/// user-submission turn — i.e. a `Message::User` whose first content block is
+/// NOT a `ToolResult` (a tool-result User message is an internal follow-up
+/// produced by the query loop, not a real user turn boundary).
+///
+/// Returns `messages.len()`, truncating to nothing, when fewer than `target`
+/// such turns exist. Used by `/return #N` to truncate engine history
+/// consistently with the display transcript: keeping exactly the first
+/// `real_users_kept` real user turns means dropping from the `(real_users_kept
+/// + 1)`-th onward.
+fn index_of_real_user_turn(messages: &[Message], target: usize) -> usize {
+    let mut seen: usize = 0;
+    for (i, m) in messages.iter().enumerate() {
+        let is_real_user = matches!(m, Message::User(_)) && !m.is_tool_result();
+        if is_real_user {
+            seen += 1;
+            if seen == target {
+                return i;
+            }
+        }
+    }
+    messages.len()
 }
 
 /// Extract a human-readable activity from tool name + JSON input.
@@ -2112,6 +2865,101 @@ fn get_git_branch(working_dir: &std::path::Path) -> Option<String> {
         .ok()
         .and_then(|o| {
             let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            if s.is_empty() { None } else { Some(s) }
+            if s.is_empty() {
+                None
+            } else {
+                Some(s)
+            }
         })
+}
+
+/// Compact working-tree change summary for the status bar.
+/// Format: `~<files>+<insertions>-<deletions>`, or `~0` when clean.
+/// Mirrors the field shown in .layout.md (e.g. `~12+576-34`).
+fn get_git_changes(working_dir: &std::path::Path) -> String {
+    let out = std::process::Command::new("git")
+        .args(["diff", "HEAD", "--shortstat"])
+        .current_dir(working_dir)
+        .output();
+    match out {
+        Ok(o) if o.status.success() => {
+            let s = String::from_utf8_lossy(&o.stdout);
+            let files = parse_shortstat_num(&s, "file");
+            let ins = parse_shortstat_num(&s, "insertion");
+            let del = parse_shortstat_num(&s, "deletion");
+            if files == 0 {
+                "~0".to_string()
+            } else {
+                format!("~{}+{}-{}", files, ins, del)
+            }
+        }
+        _ => "~0".to_string(),
+    }
+}
+
+/// Pull the integer preceding `keyword` ("file"/"insertion"/"deletion")
+/// out of a `git diff --shortstat` line.
+fn parse_shortstat_num(s: &str, keyword: &str) -> u64 {
+    s.split_whitespace()
+        .enumerate()
+        .find_map(|(i, w)| {
+            if w.contains(keyword) && i > 0 {
+                s.split_whitespace()
+                    .nth(i - 1)
+                    .and_then(|n| n.parse::<u64>().ok())
+            } else {
+                None
+            }
+        })
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod return_cmd_tests {
+    use super::*;
+    use venus_core::message::{AssistantMessage, ContentBlock, Message, UserMessage};
+
+    fn user_text(s: &str) -> Message {
+        Message::User(UserMessage::new(vec![ContentBlock::text(s)]))
+    }
+    fn user_tool_result() -> Message {
+        Message::User(UserMessage::new(vec![ContentBlock::tool_result(
+            "tu_1".to_string(),
+            vec![ContentBlock::text("ok")],
+            false,
+        )]))
+    }
+    fn assistant() -> Message {
+        Message::Assistant(AssistantMessage::new(vec![ContentBlock::text("a")]))
+    }
+
+    #[test]
+    fn finds_kth_real_user_turn_ignoring_tool_results() {
+        // Layout: [u1, a, uTool, a, u2, a]
+        let msgs = vec![
+            user_text("hi"), // real turn 1 -> idx 0
+            assistant(),
+            user_tool_result(),
+            assistant(),
+            user_text("yo"), // real turn 2 -> idx 4
+            assistant(),
+        ];
+        assert_eq!(index_of_real_user_turn(&msgs, 1), 0);
+        assert_eq!(index_of_real_user_turn(&msgs, 2), 4);
+        assert_eq!(index_of_real_user_turn(&msgs, 3), msgs.len()); // none beyond
+    }
+
+    #[test]
+    fn target_zero_returns_len_no_crash() {
+        // No turn is ever the 0th; degenerate input yields truncate-strategy
+        // "drop nothing" (len), which the caller must avoid by validating n>=1.
+        let msgs = vec![user_text("hi")];
+        assert_eq!(index_of_real_user_turn(&msgs, 0), msgs.len());
+    }
+
+    #[test]
+    fn empty_history_is_len() {
+        let msgs: Vec<Message> = vec![];
+        assert_eq!(index_of_real_user_turn(&msgs, 1), 0);
+    }
 }

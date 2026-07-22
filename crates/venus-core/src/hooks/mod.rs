@@ -240,7 +240,10 @@ impl HookRunner {
                 .await;
             match check {
                 Ok(output) if !output.status.success() => {
-                    debug!("hook condition failed (exit {}), skipping", output.status.code().unwrap_or(-1));
+                    debug!(
+                        "hook condition failed (exit {}), skipping",
+                        output.status.code().unwrap_or(-1)
+                    );
                     return Ok(HookOutput {
                         exit_code: 0,
                         stdout: String::new(),
@@ -307,11 +310,7 @@ impl HookRunner {
     }
 
     /// Execute an HTTP hook: POST JSON event payload to the configured URL.
-    async fn execute_http_hook(
-        &self,
-        hook: &CommandHook,
-        event: &HookEvent,
-    ) -> Result<HookOutput> {
+    async fn execute_http_hook(&self, hook: &CommandHook, event: &HookEvent) -> Result<HookOutput> {
         let payload = serde_json::to_string(event)?;
 
         debug!(

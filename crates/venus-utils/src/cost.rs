@@ -106,6 +106,33 @@ impl CostTracker {
         total
     }
 
+    /// Per-model `(model, usage, cost_usd)` tuples for breakdown display.
+    ///
+    /// A cost of `0.0` is reported for any model whose usage maps to the
+    /// unknown-pricing fallback path (the Sonnet pricing), so callers can still
+    /// surface the line — they just can't trust the precise USD there.
+    pub fn per_model_summary(&self) -> Vec<(String, TokenUsage, f64)> {
+        let pricing = default_pricing();
+        let mut out: Vec<(String, TokenUsage, f64)> = Vec::new();
+        for (model, usage) in &self.usage_by_model {
+            let price = pricing.get(model.as_str());
+            let fallback = &pricing["claude-sonnet-4-20250514"];
+            let effective = price.unwrap_or(fallback);
+            let cost = {
+                let mut c = 0.0;
+                c += usage.input_tokens as f64 * effective.input_per_million / 1_000_000.0;
+                c += usage.output_tokens as f64 * effective.output_per_million / 1_000_000.0;
+                c += usage.cache_read_tokens as f64 * effective.cache_read_per_million
+                    / 1_000_000.0;
+                c += usage.cache_creation_tokens as f64 * effective.cache_write_per_million
+                    / 1_000_000.0;
+                c
+            };
+            out.push((model.clone(), usage.clone(), cost));
+        }
+        out
+    }
+
     pub fn total_usage(&self) -> TokenUsage {
         let mut total = TokenUsage::default();
         for usage in self.usage_by_model.values() {

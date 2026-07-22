@@ -125,6 +125,7 @@ mod tests {
             tools: Arc::new(ToolRegistry::new(tools)),
             hook_runner: Arc::new(HookRunner::new(None, "test-session".to_string(), dir.to_path_buf())),
             cron_scheduler: None,
+            cost_tracker: None,
         }
     }
 

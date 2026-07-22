@@ -110,12 +110,22 @@ impl HookEvent {
     /// Returns event-specific data as a JSON value.
     pub fn event_data(&self) -> Value {
         match self {
-            HookEvent::PreToolUse { session_id, tool_name, tool_input } => serde_json::json!({
+            HookEvent::PreToolUse {
+                session_id,
+                tool_name,
+                tool_input,
+            } => serde_json::json!({
                 "session_id": session_id,
                 "tool_name": tool_name,
                 "tool_input": tool_input,
             }),
-            HookEvent::PostToolUse { session_id, tool_name, tool_input, tool_result, is_error } => serde_json::json!({
+            HookEvent::PostToolUse {
+                session_id,
+                tool_name,
+                tool_input,
+                tool_result,
+                is_error,
+            } => serde_json::json!({
                 "session_id": session_id,
                 "tool_name": tool_name,
                 "tool_input": tool_input,
@@ -126,16 +136,27 @@ impl HookEvent {
                 "session_id": session_id,
                 "prompt": prompt,
             }),
-            HookEvent::SessionStart { session_id, cwd, model } => serde_json::json!({
+            HookEvent::SessionStart {
+                session_id,
+                cwd,
+                model,
+            } => serde_json::json!({
                 "session_id": session_id,
                 "cwd": cwd,
                 "model": model,
             }),
-            HookEvent::PreCompact { session_id, message_count } => serde_json::json!({
+            HookEvent::PreCompact {
+                session_id,
+                message_count,
+            } => serde_json::json!({
                 "session_id": session_id,
                 "message_count": message_count,
             }),
-            HookEvent::PostCompact { session_id, messages_before, messages_after } => serde_json::json!({
+            HookEvent::PostCompact {
+                session_id,
+                messages_before,
+                messages_after,
+            } => serde_json::json!({
                 "session_id": session_id,
                 "messages_before": messages_before,
                 "messages_after": messages_after,
@@ -143,37 +164,61 @@ impl HookEvent {
             HookEvent::Stop { session_id } => serde_json::json!({
                 "session_id": session_id,
             }),
-            HookEvent::PostToolUseFailure { session_id, tool_name, error } => serde_json::json!({
+            HookEvent::PostToolUseFailure {
+                session_id,
+                tool_name,
+                error,
+            } => serde_json::json!({
                 "session_id": session_id,
                 "tool_name": tool_name,
                 "error": error,
             }),
-            HookEvent::SessionEnd { session_id, message_count } => serde_json::json!({
+            HookEvent::SessionEnd {
+                session_id,
+                message_count,
+            } => serde_json::json!({
                 "session_id": session_id,
                 "message_count": message_count,
             }),
-            HookEvent::SubagentStart { session_id, description } => serde_json::json!({
+            HookEvent::SubagentStart {
+                session_id,
+                description,
+            } => serde_json::json!({
                 "session_id": session_id,
                 "description": description,
             }),
             HookEvent::SubagentStop { session_id } => serde_json::json!({
                 "session_id": session_id,
             }),
-            HookEvent::PermissionRequest { session_id, tool_name } => serde_json::json!({
+            HookEvent::PermissionRequest {
+                session_id,
+                tool_name,
+            } => serde_json::json!({
                 "session_id": session_id,
                 "tool_name": tool_name,
             }),
-            HookEvent::FileChanged { session_id, path, change_type } => serde_json::json!({
+            HookEvent::FileChanged {
+                session_id,
+                path,
+                change_type,
+            } => serde_json::json!({
                 "session_id": session_id,
                 "path": path,
                 "change_type": change_type,
             }),
-            HookEvent::TaskCreated { session_id, task_id, subject } => serde_json::json!({
+            HookEvent::TaskCreated {
+                session_id,
+                task_id,
+                subject,
+            } => serde_json::json!({
                 "session_id": session_id,
                 "task_id": task_id,
                 "subject": subject,
             }),
-            HookEvent::TaskCompleted { session_id, task_id } => serde_json::json!({
+            HookEvent::TaskCompleted {
+                session_id,
+                task_id,
+            } => serde_json::json!({
                 "session_id": session_id,
                 "task_id": task_id,
             }),
@@ -212,21 +257,118 @@ mod tests {
     #[test]
     fn test_event_name_all_variants() {
         let events = vec![
-            (HookEvent::PreToolUse { session_id: "s".into(), tool_name: "t".into(), tool_input: Value::Null }, "PreToolUse"),
-            (HookEvent::PostToolUse { session_id: "s".into(), tool_name: "t".into(), tool_input: Value::Null, tool_result: "r".into(), is_error: false }, "PostToolUse"),
-            (HookEvent::UserPromptSubmit { session_id: "s".into(), prompt: "p".into() }, "UserPromptSubmit"),
-            (HookEvent::SessionStart { session_id: "s".into(), cwd: "/".into(), model: "m".into() }, "SessionStart"),
-            (HookEvent::PreCompact { session_id: "s".into(), message_count: 0 }, "PreCompact"),
-            (HookEvent::PostCompact { session_id: "s".into(), messages_before: 0, messages_after: 0 }, "PostCompact"),
-            (HookEvent::Stop { session_id: "s".into() }, "Stop"),
-            (HookEvent::PostToolUseFailure { session_id: "s".into(), tool_name: "t".into(), error: "e".into() }, "PostToolUseFailure"),
-            (HookEvent::SessionEnd { session_id: "s".into(), message_count: 5 }, "SessionEnd"),
-            (HookEvent::SubagentStart { session_id: "s".into(), description: "d".into() }, "SubagentStart"),
-            (HookEvent::SubagentStop { session_id: "s".into() }, "SubagentStop"),
-            (HookEvent::PermissionRequest { session_id: "s".into(), tool_name: "t".into() }, "PermissionRequest"),
-            (HookEvent::FileChanged { session_id: "s".into(), path: "f.rs".into(), change_type: "modified".into() }, "FileChanged"),
-            (HookEvent::TaskCreated { session_id: "s".into(), task_id: "t1".into(), subject: "subj".into() }, "TaskCreated"),
-            (HookEvent::TaskCompleted { session_id: "s".into(), task_id: "t1".into() }, "TaskCompleted"),
+            (
+                HookEvent::PreToolUse {
+                    session_id: "s".into(),
+                    tool_name: "t".into(),
+                    tool_input: Value::Null,
+                },
+                "PreToolUse",
+            ),
+            (
+                HookEvent::PostToolUse {
+                    session_id: "s".into(),
+                    tool_name: "t".into(),
+                    tool_input: Value::Null,
+                    tool_result: "r".into(),
+                    is_error: false,
+                },
+                "PostToolUse",
+            ),
+            (
+                HookEvent::UserPromptSubmit {
+                    session_id: "s".into(),
+                    prompt: "p".into(),
+                },
+                "UserPromptSubmit",
+            ),
+            (
+                HookEvent::SessionStart {
+                    session_id: "s".into(),
+                    cwd: "/".into(),
+                    model: "m".into(),
+                },
+                "SessionStart",
+            ),
+            (
+                HookEvent::PreCompact {
+                    session_id: "s".into(),
+                    message_count: 0,
+                },
+                "PreCompact",
+            ),
+            (
+                HookEvent::PostCompact {
+                    session_id: "s".into(),
+                    messages_before: 0,
+                    messages_after: 0,
+                },
+                "PostCompact",
+            ),
+            (
+                HookEvent::Stop {
+                    session_id: "s".into(),
+                },
+                "Stop",
+            ),
+            (
+                HookEvent::PostToolUseFailure {
+                    session_id: "s".into(),
+                    tool_name: "t".into(),
+                    error: "e".into(),
+                },
+                "PostToolUseFailure",
+            ),
+            (
+                HookEvent::SessionEnd {
+                    session_id: "s".into(),
+                    message_count: 5,
+                },
+                "SessionEnd",
+            ),
+            (
+                HookEvent::SubagentStart {
+                    session_id: "s".into(),
+                    description: "d".into(),
+                },
+                "SubagentStart",
+            ),
+            (
+                HookEvent::SubagentStop {
+                    session_id: "s".into(),
+                },
+                "SubagentStop",
+            ),
+            (
+                HookEvent::PermissionRequest {
+                    session_id: "s".into(),
+                    tool_name: "t".into(),
+                },
+                "PermissionRequest",
+            ),
+            (
+                HookEvent::FileChanged {
+                    session_id: "s".into(),
+                    path: "f.rs".into(),
+                    change_type: "modified".into(),
+                },
+                "FileChanged",
+            ),
+            (
+                HookEvent::TaskCreated {
+                    session_id: "s".into(),
+                    task_id: "t1".into(),
+                    subject: "subj".into(),
+                },
+                "TaskCreated",
+            ),
+            (
+                HookEvent::TaskCompleted {
+                    session_id: "s".into(),
+                    task_id: "t1".into(),
+                },
+                "TaskCompleted",
+            ),
         ];
 
         for (event, expected_name) in events {
@@ -237,33 +379,93 @@ mod tests {
     #[test]
     fn test_tool_name_returns_some_for_tool_events() {
         let tool_events: Vec<HookEvent> = vec![
-            HookEvent::PreToolUse { session_id: "s".into(), tool_name: "Bash".into(), tool_input: Value::Null },
-            HookEvent::PostToolUse { session_id: "s".into(), tool_name: "Edit".into(), tool_input: Value::Null, tool_result: "".into(), is_error: false },
-            HookEvent::PostToolUseFailure { session_id: "s".into(), tool_name: "Write".into(), error: "fail".into() },
-            HookEvent::PermissionRequest { session_id: "s".into(), tool_name: "Bash".into() },
+            HookEvent::PreToolUse {
+                session_id: "s".into(),
+                tool_name: "Bash".into(),
+                tool_input: Value::Null,
+            },
+            HookEvent::PostToolUse {
+                session_id: "s".into(),
+                tool_name: "Edit".into(),
+                tool_input: Value::Null,
+                tool_result: "".into(),
+                is_error: false,
+            },
+            HookEvent::PostToolUseFailure {
+                session_id: "s".into(),
+                tool_name: "Write".into(),
+                error: "fail".into(),
+            },
+            HookEvent::PermissionRequest {
+                session_id: "s".into(),
+                tool_name: "Bash".into(),
+            },
         ];
         for event in &tool_events {
-            assert!(event.tool_name().is_some(), "expected tool_name for {}", event.event_name());
+            assert!(
+                event.tool_name().is_some(),
+                "expected tool_name for {}",
+                event.event_name()
+            );
         }
     }
 
     #[test]
     fn test_tool_name_returns_none_for_non_tool_events() {
         let non_tool_events: Vec<HookEvent> = vec![
-            HookEvent::UserPromptSubmit { session_id: "s".into(), prompt: "p".into() },
-            HookEvent::SessionStart { session_id: "s".into(), cwd: "/".into(), model: "m".into() },
-            HookEvent::Stop { session_id: "s".into() },
-            HookEvent::SessionEnd { session_id: "s".into(), message_count: 0 },
-            HookEvent::SubagentStart { session_id: "s".into(), description: "d".into() },
-            HookEvent::SubagentStop { session_id: "s".into() },
-            HookEvent::FileChanged { session_id: "s".into(), path: "f".into(), change_type: "added".into() },
-            HookEvent::TaskCreated { session_id: "s".into(), task_id: "t".into(), subject: "s".into() },
-            HookEvent::TaskCompleted { session_id: "s".into(), task_id: "t".into() },
-            HookEvent::PreCompact { session_id: "s".into(), message_count: 0 },
-            HookEvent::PostCompact { session_id: "s".into(), messages_before: 0, messages_after: 0 },
+            HookEvent::UserPromptSubmit {
+                session_id: "s".into(),
+                prompt: "p".into(),
+            },
+            HookEvent::SessionStart {
+                session_id: "s".into(),
+                cwd: "/".into(),
+                model: "m".into(),
+            },
+            HookEvent::Stop {
+                session_id: "s".into(),
+            },
+            HookEvent::SessionEnd {
+                session_id: "s".into(),
+                message_count: 0,
+            },
+            HookEvent::SubagentStart {
+                session_id: "s".into(),
+                description: "d".into(),
+            },
+            HookEvent::SubagentStop {
+                session_id: "s".into(),
+            },
+            HookEvent::FileChanged {
+                session_id: "s".into(),
+                path: "f".into(),
+                change_type: "added".into(),
+            },
+            HookEvent::TaskCreated {
+                session_id: "s".into(),
+                task_id: "t".into(),
+                subject: "s".into(),
+            },
+            HookEvent::TaskCompleted {
+                session_id: "s".into(),
+                task_id: "t".into(),
+            },
+            HookEvent::PreCompact {
+                session_id: "s".into(),
+                message_count: 0,
+            },
+            HookEvent::PostCompact {
+                session_id: "s".into(),
+                messages_before: 0,
+                messages_after: 0,
+            },
         ];
         for event in &non_tool_events {
-            assert!(event.tool_name().is_none(), "expected None tool_name for {}", event.event_name());
+            assert!(
+                event.tool_name().is_none(),
+                "expected None tool_name for {}",
+                event.event_name()
+            );
         }
     }
 
@@ -349,7 +551,9 @@ mod tests {
 
     #[test]
     fn test_event_serialization_tagged() {
-        let event = HookEvent::SubagentStop { session_id: "s".into() };
+        let event = HookEvent::SubagentStop {
+            session_id: "s".into(),
+        };
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["event"], "SubagentStop");
         assert_eq!(json["session_id"], "s");

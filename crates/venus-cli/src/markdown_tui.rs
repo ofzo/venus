@@ -1,3 +1,4 @@
+use crate::ui::THEME_COLOR;
 use ratatui::prelude::*;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::ThemeSet;
@@ -51,7 +52,7 @@ pub fn parse_inline(text: &str) -> Vec<Span<'static>> {
                     spans.push(Span::raw(std::mem::take(&mut current_text)));
                 }
                 let inner: String = chars[i + 1..end].iter().collect();
-                spans.push(Span::styled(inner, Style::default().fg(Color::Cyan)));
+                spans.push(Span::styled(inner, Style::default().fg(THEME_COLOR)));
                 i = end + 1;
                 continue;
             }

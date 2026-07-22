@@ -1,6 +1,6 @@
 # Venus
 
-A terminal-based AI coding assistant built in Rust, powered by the Anthropic Claude API. Designed as a feature-complete alternative to Claude Code.
+A terminal-based AI coding assistant built in Rust, powered by the VENUS Claude API. Designed as a feature-complete alternative to Claude Code.
 
 ## Features
 
@@ -33,7 +33,7 @@ venus/
 │   ├── venus-core/         # QueryEngine, message types, tools, LSP, sub-agent, cron
 │   ├── venus-tools/        # 40+ tool implementations
 │   ├── venus-mcp/          # MCP client (stdio/SSE transport, tool bridge)
-│   ├── venus-services/     # Anthropic API client, SSE streaming
+│   ├── venus-services/     # VENUS API client, SSE streaming
 │   ├── venus-permissions/  # Permission pipeline, rule matching, TUI handler
 │   └── venus-utils/        # Config, git, cost tracking, memory, session, helpers
 └── tests/
@@ -43,7 +43,7 @@ venus/
 
 - Rust (stable, via [rustup](https://rustup.rs))
 - [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) for the Grep tool
-- An Anthropic API key (or compatible provider)
+- An VENUS API key (or compatible provider)
 
 ## Build
 

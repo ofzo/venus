@@ -49,7 +49,9 @@ impl CronExpr {
             && self.hours.contains(&dt.hour())
             && self.days_of_month.contains(&dt.day())
             && self.months.contains(&dt.month())
-            && self.days_of_week.contains(&dt.weekday().num_days_from_sunday())
+            && self
+                .days_of_week
+                .contains(&dt.weekday().num_days_from_sunday())
     }
 
     /// Parse a single cron field. Handles: *, N, N-M, */N, N-M/S, N,M,O

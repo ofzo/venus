@@ -17,6 +17,11 @@ use venus_utils::config::Settings;
 pub struct ToolResult {
     pub content: Vec<ContentBlock>,
     pub is_error: bool,
+    /// Optional structured diff captured by file-write/edit tools. When
+    /// present, the TUI renders a colourised `+/-` diff block under the tool
+    /// header instead of (or alongside) the plain status-line body. `None` for
+    /// all non-file tools and for no-op / error tool calls.
+    pub diff: Option<venus_utils::diff::ToolDiff>,
 }
 
 impl ToolResult {
@@ -24,6 +29,7 @@ impl ToolResult {
         Self {
             content: vec![ContentBlock::text(s)],
             is_error: false,
+            diff: None,
         }
     }
 
@@ -31,18 +37,22 @@ impl ToolResult {
         Self {
             content: vec![ContentBlock::text(s)],
             is_error: true,
+            diff: None,
         }
+    }
+
+    /// Attach the previously-computed structured file diff. Consumes `self`
+    /// so the caller cannot forget to return the built result.
+    pub fn with_diff(mut self, diff: venus_utils::diff::ToolDiff) -> Self {
+        self.diff = Some(diff);
+        self
     }
 }
 
 /// Permission handler trait - implemented by the permission system.
 #[async_trait]
 pub trait PermissionHandler: Send + Sync {
-    async fn check_permission(
-        &self,
-        tool_name: &str,
-        input: &Value,
-    ) -> PermissionDecision;
+    async fn check_permission(&self, tool_name: &str, input: &Value) -> PermissionDecision;
 }
 
 #[derive(Debug, Clone)]
@@ -72,6 +82,12 @@ pub struct ToolContext {
     pub tools: Arc<crate::tool_registry::ToolRegistry>,
     pub hook_runner: Arc<crate::hooks::HookRunner>,
     pub cron_scheduler: Option<Arc<crate::cron::CronScheduler>>,
+    /// Parent engine's cost tracker, shared by sub-agents spawned via
+    /// the `Agent` tool. When `Some`, the sub-agent records its token
+    /// usage into the *same* tracker so the parent's `cost_tracker`
+    /// reflects the true total (main + sub-agent) consumption; tests
+    /// can leave this `None` to fall back to an isolated tracker.
+    pub cost_tracker: Option<Arc<std::sync::Mutex<venus_utils::cost::CostTracker>>>,
 }
 
 /// The core Tool trait that all tools implement.
@@ -96,7 +112,11 @@ pub trait Tool: Send + Sync {
 
     /// Format the tool use for display to the user (for permission prompting).
     fn format_for_display(&self, input: &Value) -> String {
-        format!("{}: {}", self.name(), serde_json::to_string_pretty(input).unwrap_or_default())
+        format!(
+            "{}: {}",
+            self.name(),
+            serde_json::to_string_pretty(input).unwrap_or_default()
+        )
     }
 
     /// Convert to the API tool definition format.

@@ -37,7 +37,10 @@ impl ToolRegistry {
     }
 
     pub fn find_by_name(&self, name: &str) -> Option<&dyn Tool> {
-        self.tools.iter().find(|t| t.name() == name).map(|t| t.as_ref())
+        self.tools
+            .iter()
+            .find(|t| t.name() == name)
+            .map(|t| t.as_ref())
     }
 
     pub fn all(&self) -> &[Box<dyn Tool>] {
@@ -81,8 +84,12 @@ mod tests {
     #[test]
     fn test_find_by_name() {
         let tools: Vec<Box<dyn Tool>> = vec![
-            Box::new(MockTool { name: "Bash".to_string() }),
-            Box::new(MockTool { name: "Read".to_string() }),
+            Box::new(MockTool {
+                name: "Bash".to_string(),
+            }),
+            Box::new(MockTool {
+                name: "Read".to_string(),
+            }),
         ];
         let registry = ToolRegistry::new(tools);
         assert!(registry.find_by_name("Bash").is_some());
@@ -93,9 +100,15 @@ mod tests {
     #[test]
     fn test_all_returns_all_tools() {
         let tools: Vec<Box<dyn Tool>> = vec![
-            Box::new(MockTool { name: "A".to_string() }),
-            Box::new(MockTool { name: "B".to_string() }),
-            Box::new(MockTool { name: "C".to_string() }),
+            Box::new(MockTool {
+                name: "A".to_string(),
+            }),
+            Box::new(MockTool {
+                name: "B".to_string(),
+            }),
+            Box::new(MockTool {
+                name: "C".to_string(),
+            }),
         ];
         let registry = ToolRegistry::new(tools);
         assert_eq!(registry.all().len(), 3);
@@ -103,9 +116,9 @@ mod tests {
 
     #[test]
     fn test_api_definitions() {
-        let tools: Vec<Box<dyn Tool>> = vec![
-            Box::new(MockTool { name: "TestTool".to_string() }),
-        ];
+        let tools: Vec<Box<dyn Tool>> = vec![Box::new(MockTool {
+            name: "TestTool".to_string(),
+        })];
         let registry = ToolRegistry::new(tools);
         let defs = registry.api_definitions();
         assert_eq!(defs.len(), 1);

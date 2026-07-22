@@ -1,9 +1,9 @@
 use std::io::{self, Stderr};
 
 use crossterm::{
+    event::{DisableMouseCapture, EnableMouseCapture},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-    event::{EnableMouseCapture, DisableMouseCapture},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 

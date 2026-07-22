@@ -1,4 +1,3 @@
-use std::io::{self, Write};
 use std::sync::Arc;
 
 use venus_core::engine::QueryEngine;
@@ -6,17 +5,87 @@ use venus_core::message::Message;
 use venus_core::skill::SkillRegistry;
 use venus_utils::session;
 
-/// Print a line to stderr using \r\n (required for raw-mode terminal).
+thread_local! {
+    /// Captures all command output. In TUI mode the app drains this buffer and
+    /// renders each line as a `DisplayMessage::Status`, so command handlers never
+    /// write raw bytes to stderr (which would corrupt the ratatui alternate screen).
+    static OUTPUT: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Append a (possibly multi-line) chunk of command output to the capture buffer.
+fn emit(s: &str) {
+    OUTPUT.with(|buf| buf.borrow_mut().push(s.to_string()));
+}
+
+/// Append a literal block of text to the capture buffer (kept distinct from
+/// `emit` only for readability of call sites that hand us multi-line text).
+fn emit_block(s: &str) {
+    OUTPUT.with(|buf| buf.borrow_mut().push(s.to_string()));
+}
+
+/// Drop any pending captured output (defensive reset before handling a command).
+pub(crate) fn clear_command_output() {
+    OUTPUT.with(|buf| buf.borrow_mut().clear());
+}
+
+/// Drain captured command output into display-ready lines: ANSI CSI escapes and
+/// carriage returns are stripped, lines are split on `\n`, and blank lines are
+/// dropped (the TUI already gives each `Status` message its own visual spacing).
+pub(crate) fn drain_command_output() -> Vec<String> {
+    OUTPUT.with(|buf| {
+        let mut guard = buf.borrow_mut();
+        let chunks = std::mem::take(&mut *guard);
+        let mut out = Vec::with_capacity(chunks.len());
+        for chunk in chunks {
+            for line in chunk.split('\n') {
+                let line = strip_ansi_and_cr(line);
+                if !line.trim().is_empty() {
+                    out.push(line);
+                }
+            }
+        }
+        out
+    })
+}
+
+/// Strip ANSI CSI sequences (`ESC [ ... <0x40..=0x7e>`) and `\r`, then trim
+/// trailing whitespace. Byte-level scan to avoid pulling in a regex dependency.
+fn strip_ansi_and_cr(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == 0x1b && i + 1 < bytes.len() && bytes[i + 1] == b'[' {
+            // Skip ESC [ ... <0x40..=0x7e> (CSI sequence, e.g. SGR color).
+            i += 2;
+            while i < bytes.len() {
+                let c = bytes[i];
+                i += 1;
+                if (0x40..=0x7e).contains(&c) {
+                    break;
+                }
+            }
+            continue;
+        }
+        if b == 0x1b || b == b'\r' {
+            i += 1;
+            continue;
+        }
+        out.push(b as char);
+        i += 1;
+    }
+    out.trim_end().to_string()
+}
+
+/// Capture a line of command output into the buffer instead of writing it
+/// straight to stderr (which would tear the ratatui alternate screen in TUI).
 macro_rules! eprintlf {
     () => {
-        let stderr = io::stderr();
-        let mut out = stderr.lock();
-        let _ = write!(out, "\r\n");
+        emit("");
     };
     ($($arg:tt)*) => {{
-        let stderr = io::stderr();
-        let mut out = stderr.lock();
-        let _ = write!(out, "{}\r\n", format_args!($($arg)*));
+        emit(&format!($($arg)*));
     }};
 }
 
@@ -122,7 +191,8 @@ pub async fn handle_command(
                             let time = chrono::DateTime::from_timestamp(s.updated_at as i64, 0)
                                 .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
                                 .unwrap_or_else(|| "unknown".to_string());
-                            let display_name = s.name.as_deref().unwrap_or(&s.id[..8.min(s.id.len())]);
+                            let display_name =
+                                s.name.as_deref().unwrap_or(&s.id[..8.min(s.id.len())]);
                             eprintlf!(
                                 "  {:>3}. {} | {} msgs | {} | {}",
                                 i + 1,
@@ -145,13 +215,12 @@ pub async fn handle_command(
             let rt = tokio::runtime::Handle::current();
             let arg = parts.get(1).map(|s| s.trim().to_string());
 
-            let sessions_result =
-                std::thread::spawn({
-                    let rt = rt.clone();
-                    move || rt.block_on(session::list_sessions())
-                })
-                .join()
-                .unwrap_or_else(|_| Ok(Vec::new()));
+            let sessions_result = std::thread::spawn({
+                let rt = rt.clone();
+                move || rt.block_on(session::list_sessions())
+            })
+            .join()
+            .unwrap_or_else(|_| Ok(Vec::new()));
 
             let sessions = match sessions_result {
                 Ok(s) => s,
@@ -212,9 +281,7 @@ pub async fn handle_command(
                     return CommandResult::Continue;
                 }
                 match choice.parse::<usize>() {
-                    Ok(idx) if idx >= 1 && idx <= display_count => {
-                        sessions[idx - 1].id.clone()
-                    }
+                    Ok(idx) if idx >= 1 && idx <= display_count => sessions[idx - 1].id.clone(),
                     _ => {
                         eprintlf!("  Invalid choice.");
                         return CommandResult::Continue;
@@ -289,7 +356,8 @@ pub async fn handle_command(
             CommandResult::InjectMessage(
                 "Create a VENUS.md file for this project. Analyze the project structure, \
                  language, build system, and conventions. Include: project overview, \
-                 build/test commands, code style, important notes.".to_string()
+                 build/test commands, code style, important notes."
+                    .to_string(),
             )
         }
         "/memory" => {
@@ -355,13 +423,13 @@ pub async fn handle_command(
         "/plan" => {
             let current = engine.plan_mode.load(std::sync::atomic::Ordering::Relaxed);
             let new_val = !current;
-            engine.plan_mode.store(new_val, std::sync::atomic::Ordering::Relaxed);
+            engine
+                .plan_mode
+                .store(new_val, std::sync::atomic::Ordering::Relaxed);
             eprintlf!("  Plan mode: {}", if new_val { "ON" } else { "OFF" });
             CommandResult::Continue
         }
-        "/vim" => {
-            CommandResult::ToggleVim
-        }
+        "/vim" => CommandResult::ToggleVim,
         "/effort" => {
             if let Some(level) = parts.get(1) {
                 match level.trim() {
@@ -378,10 +446,16 @@ pub async fn handle_command(
         "/copy" => {
             let messages = engine.messages.lock().await;
             let last = messages.iter().rev().find_map(|m| {
-                if let venus_core::message::Message::Assistant(a) = m { Some(a) } else { None }
+                if let venus_core::message::Message::Assistant(a) = m {
+                    Some(a)
+                } else {
+                    None
+                }
             });
             if let Some(msg) = last {
-                let text: String = msg.content.iter()
+                let text: String = msg
+                    .content
+                    .iter()
                     .filter_map(|b| b.as_text())
                     .collect::<Vec<_>>()
                     .join("\n");
@@ -424,7 +498,10 @@ pub async fn handle_command(
             eprintlf!("    Messages:   {}", msg_count);
             eprintlf!("    Cost:       {}", cost);
             eprintlf!("    Model:      {}", engine.model);
-            eprintlf!("    Plan mode:  {}", engine.plan_mode.load(std::sync::atomic::Ordering::Relaxed));
+            eprintlf!(
+                "    Plan mode:  {}",
+                engine.plan_mode.load(std::sync::atomic::Ordering::Relaxed)
+            );
             eprintlf!();
             CommandResult::Continue
         }
@@ -434,13 +511,17 @@ pub async fn handle_command(
                 return CommandResult::Continue;
             }
             CommandResult::InjectMessage(
-                "Provide a brief summary of our conversation so far.".to_string()
+                "Provide a brief summary of our conversation so far.".to_string(),
             )
         }
         "/export" => {
-            let path = parts.get(1).map(|s| s.trim()).unwrap_or("conversation.json");
+            let path = parts
+                .get(1)
+                .map(|s| s.trim())
+                .unwrap_or("conversation.json");
             let messages = engine.messages.lock().await;
-            let values: Vec<serde_json::Value> = messages.iter()
+            let values: Vec<serde_json::Value> = messages
+                .iter()
                 .filter_map(|m| serde_json::to_value(m).ok())
                 .collect();
             drop(messages);
@@ -454,7 +535,10 @@ pub async fn handle_command(
             CommandResult::Continue
         }
         "/rewind" => {
-            let n: usize = parts.get(1).and_then(|s| s.trim().parse().ok()).unwrap_or(1);
+            let n: usize = parts
+                .get(1)
+                .and_then(|s| s.trim().parse().ok())
+                .unwrap_or(1);
             let mut messages = engine.messages.lock().await;
             let total = messages.len();
             let remove = (n * 2).min(total);
@@ -483,13 +567,21 @@ pub async fn handle_command(
                     }
                 }
                 _ => {
-                    let mode = engine.settings.permission_mode.as_deref().unwrap_or("default");
+                    let mode = engine
+                        .settings
+                        .permission_mode
+                        .as_deref()
+                        .unwrap_or("default");
                     eprintlf!("\r\n  Permission mode: {} (Shift+Tab to cycle)", mode);
                     if let Some(ref allow) = engine.settings.always_allow {
                         if !allow.is_empty() {
                             eprintlf!("\r\n  Allow rules:");
                             for rule in allow {
-                                eprintlf!("    ALLOW  {}:{}", rule.tool, rule.pattern.as_deref().unwrap_or("*"));
+                                eprintlf!(
+                                    "    ALLOW  {}:{}",
+                                    rule.tool,
+                                    rule.pattern.as_deref().unwrap_or("*")
+                                );
                             }
                         }
                     }
@@ -497,7 +589,11 @@ pub async fn handle_command(
                         if !deny.is_empty() {
                             eprintlf!("\r\n  Deny rules:");
                             for rule in deny {
-                                eprintlf!("    DENY   {}:{}", rule.tool, rule.pattern.as_deref().unwrap_or("*"));
+                                eprintlf!(
+                                    "    DENY   {}:{}",
+                                    rule.tool,
+                                    rule.pattern.as_deref().unwrap_or("*")
+                                );
                             }
                         }
                     }
@@ -577,17 +673,22 @@ pub async fn handle_command(
                         "history_up": "Up",
                         "history_down": "Down",
                     });
-                    match std::fs::write(&kb_path, serde_json::to_string_pretty(&bindings).unwrap()) {
+                    match std::fs::write(&kb_path, serde_json::to_string_pretty(&bindings).unwrap())
+                    {
                         Ok(()) => eprintlf!("  Keybindings saved to: {}", kb_path.display()),
                         Err(e) => eprintlf!("  Error saving keybindings: {}", e),
                     }
                 }
                 Some("load") => {
-                    let kb_path = dirs::home_dir().unwrap_or_default().join(".venus/keybindings.json");
+                    let kb_path = dirs::home_dir()
+                        .unwrap_or_default()
+                        .join(".venus/keybindings.json");
                     match std::fs::read_to_string(&kb_path) {
                         Ok(content) => {
                             eprintlf!("  Loaded keybindings from: {}", kb_path.display());
-                            if let Ok(bindings) = serde_json::from_str::<serde_json::Value>(&content) {
+                            if let Ok(bindings) =
+                                serde_json::from_str::<serde_json::Value>(&content)
+                            {
                                 if let Some(obj) = bindings.as_object() {
                                     for (action, key) in obj {
                                         eprintlf!("    {} -> {}", action, key);
@@ -595,7 +696,9 @@ pub async fn handle_command(
                                 }
                             }
                         }
-                        Err(_) => eprintlf!("  No saved keybindings found. Use /keybindings save first."),
+                        Err(_) => {
+                            eprintlf!("  No saved keybindings found. Use /keybindings save first.")
+                        }
                     }
                 }
                 _ => {
@@ -619,7 +722,8 @@ pub async fn handle_command(
         "/color" => {
             let color = parts.get(1).map(|s| s.trim());
             match color {
-                Some("blue") | Some("green") | Some("red") | Some("yellow") | Some("cyan") | Some("magenta") | Some("white") => {
+                Some("blue") | Some("green") | Some("red") | Some("yellow") | Some("cyan")
+                | Some("magenta") | Some("white") => {
                     engine.prompt_color = color.unwrap().to_string();
                     eprintlf!("  Prompt color set to: {}", color.unwrap());
                 }
@@ -652,14 +756,29 @@ pub async fn handle_command(
         }
         "/sandbox-toggle" => {
             // Toggle sandbox mode (bypass permissions on/off)
-            let current = engine.settings.permission_mode.as_deref().unwrap_or("default");
-            let next = if current == "bypass" { "default" } else { "bypass" };
+            let current = engine
+                .settings
+                .permission_mode
+                .as_deref()
+                .unwrap_or("default");
+            let next = if current == "bypass" {
+                "default"
+            } else {
+                "bypass"
+            };
             engine.settings = Arc::new({
                 let mut s = (*engine.settings).clone();
                 s.permission_mode = Some(next.to_string());
                 s
             });
-            eprintlf!("  Sandbox mode: {}", if next == "bypass" { "OFF (bypass)" } else { "ON (default)" });
+            eprintlf!(
+                "  Sandbox mode: {}",
+                if next == "bypass" {
+                    "OFF (bypass)"
+                } else {
+                    "ON (default)"
+                }
+            );
             CommandResult::Continue
         }
         "/ps" => {
@@ -685,7 +804,8 @@ pub async fn handle_command(
                 }
                 // Show persisted tasks that aren't in the active list
                 let active_ids: Vec<&str> = tasks.iter().map(|t| t.id.as_str()).collect();
-                let historical: Vec<_> = persisted.iter()
+                let historical: Vec<_> = persisted
+                    .iter()
                     .filter(|t| !active_ids.contains(&t.id.as_str()))
                     .collect();
                 if !historical.is_empty() {
@@ -720,9 +840,12 @@ pub async fn handle_command(
                     }
                     Err(_) => {
                         // Fall back to persisted tasks on disk
-                        match venus_core::background::BackgroundTaskRuntime::load_from_disk().await {
+                        match venus_core::background::BackgroundTaskRuntime::load_from_disk().await
+                        {
                             Ok(tasks) => {
-                                if let Some(info) = tasks.iter().find(|t| t.id == id || id.starts_with(&t.id)) {
+                                if let Some(info) =
+                                    tasks.iter().find(|t| t.id == id || id.starts_with(&t.id))
+                                {
                                     eprintlf!("\r\n  Task: {} - {}", info.id, info.description);
                                     eprintlf!("  Status: {:?}", info.status);
                                     if let Some(ref output) = info.output {
@@ -841,11 +964,16 @@ pub async fn handle_command(
                     }
                 }
                 Some(other) => {
-                    eprintlf!("  Unknown style: {}. Use: default, explanatory, learning", other);
+                    eprintlf!(
+                        "  Unknown style: {}. Use: default, explanatory, learning",
+                        other
+                    );
                 }
                 None => {
                     eprintlf!("  Usage: /output-style <default|explanatory|learning>");
-                    eprintlf!("  Current styles inject additional instructions into the system prompt.");
+                    eprintlf!(
+                        "  Current styles inject additional instructions into the system prompt."
+                    );
                 }
             }
             CommandResult::Continue
@@ -943,10 +1071,7 @@ pub async fn handle_command(
                         for entry in hook_list {
                             let matcher = entry.matcher.as_deref().unwrap_or("*");
                             for hook in &entry.hooks {
-                                eprintlf!(
-                                    "    {} ({}) -> {}",
-                                    event, matcher, hook.command
-                                );
+                                eprintlf!("    {} ({}) -> {}", event, matcher, hook.command);
                             }
                         }
                     }
@@ -995,7 +1120,10 @@ pub async fn handle_command(
                         .join()
                         .unwrap_or_else(|_| Err(anyhow::anyhow!("thread panic")))
                         {
-                            Ok(()) => eprintlf!("  Deleted session {}.", &session_id[..8.min(session_id.len())]),
+                            Ok(()) => eprintlf!(
+                                "  Deleted session {}.",
+                                &session_id[..8.min(session_id.len())]
+                            ),
                             Err(e) => eprintlf!("  Error deleting session: {}", e),
                         }
                     }
@@ -1107,7 +1235,10 @@ async fn handle_compact(engine: &QueryEngine) {
     let total = engine.messages.lock().await.len();
 
     if total <= 4 {
-        eprintlf!("\r\n  Conversation has {} messages, nothing to compact.", total);
+        eprintlf!(
+            "\r\n  Conversation has {} messages, nothing to compact.",
+            total
+        );
         return;
     }
 
@@ -1132,7 +1263,9 @@ async fn handle_compact(engine: &QueryEngine) {
         Ok(result) => {
             eprintlf!(
                 "  Compacted: {} -> {} messages (~{} tokens saved)",
-                result.messages_before, result.messages_after, result.tokens_saved_estimate,
+                result.messages_before,
+                result.messages_after,
+                result.tokens_saved_estimate,
             );
         }
         Err(e) => {
@@ -1143,7 +1276,8 @@ async fn handle_compact(engine: &QueryEngine) {
             messages.drain(..removed);
             eprintlf!(
                 "  Fell back to keeping last {} messages (removed {}).",
-                keep, removed
+                keep,
+                removed
             );
         }
     }
@@ -1159,11 +1293,19 @@ async fn handle_config(engine: &QueryEngine) {
 
     let total_usage = engine.cost_tracker.lock().unwrap().total_usage();
 
-    let provider_name = engine.settings.active_provider.as_deref().unwrap_or("(none)");
+    let provider_name = engine
+        .settings
+        .active_provider
+        .as_deref()
+        .unwrap_or("(none)");
     let provider_type = engine.settings.provider_type();
 
     eprintlf!("\r\n  \x1b[1mConfiguration:\x1b[0m");
-    eprintlf!("    Provider:          {} ({})", provider_name, provider_type);
+    eprintlf!(
+        "    Provider:          {} ({})",
+        provider_name,
+        provider_type
+    );
     eprintlf!("    Model:             {}", engine.model);
     eprintlf!("    Base URL:          {}", engine.base_url);
     eprintlf!("    Working dir:       {}", engine.working_dir.display());
@@ -1176,7 +1318,10 @@ async fn handle_config(engine: &QueryEngine) {
         eprintlf!("    Budget:            ${:.2}", budget);
     }
     if let Some(ref thinking) = engine.settings.thinking {
-        eprintlf!("    Thinking:          {}", thinking.mode.as_deref().unwrap_or("default"));
+        eprintlf!(
+            "    Thinking:          {}",
+            thinking.mode.as_deref().unwrap_or("default")
+        );
     }
     if let Some(ref allow) = engine.settings.always_allow {
         eprintlf!("    Allow rules:       {}", allow.len());
@@ -1212,9 +1357,7 @@ async fn handle_doctor(engine: &QueryEngine) {
 
     // Check ~/.venus/config.toml
     let config_path = dirs_path("config.toml");
-    let config_exists = config_path
-        .map(|p| p.exists())
-        .unwrap_or(false);
+    let config_exists = config_path.map(|p| p.exists()).unwrap_or(false);
     print_check("~/.venus/config.toml", config_exists);
 
     eprintlf!();
@@ -1223,10 +1366,7 @@ async fn handle_doctor(engine: &QueryEngine) {
 /// Display rich context analysis with token breakdown.
 async fn handle_context(engine: &QueryEngine) {
     let messages = engine.messages.lock().await;
-    let analysis = venus_core::compact::analysis::analyze_context(
-        &messages,
-        &engine.system_prompt,
-    );
+    let analysis = venus_core::compact::analysis::analyze_context(&messages, &engine.system_prompt);
     let window = venus_utils::context_window::context_window_for_model(&engine.model);
     let threshold = venus_utils::context_window::auto_compact_threshold(&engine.model);
 
@@ -1247,7 +1387,10 @@ async fn handle_context(engine: &QueryEngine) {
     eprintlf!("    \x1b[1mToken breakdown (estimated):\x1b[0m");
     eprintlf!("      System prompt:     {}", analysis.system_prompt_tokens);
     eprintlf!("      User text:         {}", analysis.user_text_tokens);
-    eprintlf!("      Assistant text:    {}", analysis.assistant_text_tokens);
+    eprintlf!(
+        "      Assistant text:    {}",
+        analysis.assistant_text_tokens
+    );
     eprintlf!(
         "      Tool requests:     {}",
         analysis.tool_request_tokens.values().sum::<u64>()
@@ -1257,7 +1400,10 @@ async fn handle_context(engine: &QueryEngine) {
         analysis.tool_result_tokens.values().sum::<u64>()
     );
     eprintlf!("      Thinking:          {}", analysis.thinking_tokens);
-    eprintlf!("      \x1b[1mTotal:             {}\x1b[0m", analysis.total_tokens);
+    eprintlf!(
+        "      \x1b[1mTotal:             {}\x1b[0m",
+        analysis.total_tokens
+    );
 
     // Show per-tool breakdown if there are tool results
     if !analysis.tool_result_tokens.is_empty() {
@@ -1296,7 +1442,10 @@ fn handle_tokens(engine: &QueryEngine) {
         eprintlf!("      Input tokens:          {}", usage.input_tokens);
         eprintlf!("      Output tokens:         {}", usage.output_tokens);
         eprintlf!("      Cache read tokens:     {}", usage.cache_read_tokens);
-        eprintlf!("      Cache creation tokens: {}", usage.cache_creation_tokens);
+        eprintlf!(
+            "      Cache creation tokens: {}",
+            usage.cache_creation_tokens
+        );
     }
 
     let cost = tracker.format_cost();
@@ -1352,9 +1501,7 @@ async fn handle_plugins() {
 
     let plugins = registry.all_plugins();
     if plugins.is_empty() {
-        let stderr = io::stderr();
-        let mut out = stderr.lock();
-        let _ = write!(out, "\r\n  No plugins installed.\r\n\r\n  Place plugins in ~/.venus/plugins/ or ./.venus/plugins/.\r\n  Each plugin directory must contain a plugin.json manifest.\r\n\r\n");
+        emit_block("\r\n  No plugins installed.\r\n\r\n  Place plugins in ~/.venus/plugins/ or ./.venus/plugins/.\r\n  Each plugin directory must contain a plugin.json manifest.\r\n\r\n");
         return;
     }
 
@@ -1367,20 +1514,35 @@ async fn handle_plugins() {
             .unwrap_or("(no description)");
         eprintlf!(
             "    \x1b[33m{}\x1b[0m v{} - {}",
-            plugin.manifest.name, plugin.manifest.version, desc
+            plugin.manifest.name,
+            plugin.manifest.version,
+            desc
         );
         if !plugin.manifest.tools.is_empty() {
-            let tool_names: Vec<&str> =
-                plugin.manifest.tools.iter().map(|t| t.name.as_str()).collect();
+            let tool_names: Vec<&str> = plugin
+                .manifest
+                .tools
+                .iter()
+                .map(|t| t.name.as_str())
+                .collect();
             eprintlf!("      Tools: {}", tool_names.join(", "));
         }
         if !plugin.manifest.mcp_servers.is_empty() {
-            let server_names: Vec<&str> = plugin.manifest.mcp_servers.keys().map(|s| s.as_str()).collect();
+            let server_names: Vec<&str> = plugin
+                .manifest
+                .mcp_servers
+                .keys()
+                .map(|s| s.as_str())
+                .collect();
             eprintlf!("      MCP servers: {}", server_names.join(", "));
         }
         if !plugin.manifest.commands.is_empty() {
-            let cmd_names: Vec<&str> =
-                plugin.manifest.commands.iter().map(|c| c.name.as_str()).collect();
+            let cmd_names: Vec<&str> = plugin
+                .manifest
+                .commands
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect();
             eprintlf!("      Commands: {}", cmd_names.join(", "));
         }
     }
@@ -1388,8 +1550,6 @@ async fn handle_plugins() {
 }
 
 fn print_help() {
-    let stderr = io::stderr();
-    let mut out = stderr.lock();
     let help = "\
 \r\n  Available commands:\
 \r\n    /help, /h       Show this help\
@@ -1422,6 +1582,7 @@ fn print_help() {
 \r\n    /summary        Summarize conversation\
 \r\n    /export [path]  Export conversation to JSON\
 \r\n    /rewind [n]     Rewind n message pairs\
+    /return [#N]    Rewind before user msg #N (default: last)\
 \r\n    /permissions    Show permission rules\
 \r\n    /mcp            Show MCP server config\
 \r\n    /files          List tracked project files\
@@ -1448,7 +1609,7 @@ fn print_help() {
 \r\n    Ctrl+C          Abort current query\
 \r\n    Ctrl+D          Exit\
 \r\n";
-    let _ = write!(out, "{}", help);
+    emit_block(help);
 }
 
 async fn get_staged_diff(working_dir: &std::path::Path) -> String {

@@ -27,6 +27,7 @@ macro_rules! eprintlf {
     }};
 }
 
+use render::OutputFormat;
 use venus_core::background::BackgroundTaskRuntime;
 use venus_core::engine::QueryEngine;
 use venus_core::hooks::HookRunner;
@@ -36,7 +37,6 @@ use venus_core::tool_registry::ToolRegistry;
 use venus_permissions::interactive::InteractivePermissionHandler;
 use venus_permissions::tui_handler::TuiPermissionHandler;
 use venus_utils::config::Settings;
-use render::OutputFormat;
 
 #[derive(Parser, Debug)]
 #[command(name = "venus", about = "Venus - AI coding assistant")]
@@ -153,14 +153,14 @@ async fn main() -> Result<()> {
         settings.model = Some(model);
     }
     if let Some(key) = cli.api_key {
-        // Set API key on the active provider (create default anthropic provider if needed)
+        // Set API key on the active provider (create default VENUS provider if needed)
         use std::collections::HashMap;
         let providers = settings.provider.get_or_insert_with(HashMap::new);
-        let provider_name = settings.active_provider.as_deref().unwrap_or("anthropic");
+        let provider_name = settings.active_provider.as_deref().unwrap_or("VENUS");
         providers
             .entry(provider_name.to_string())
             .or_insert_with(|| venus_utils::config::ProviderConfig {
-                provider_type: "anthropic".to_string(),
+                provider_type: "VENUS".to_string(),
                 api_key: None,
                 auth_token: None,
                 base_url: None,
@@ -170,7 +170,7 @@ async fn main() -> Result<()> {
             })
             .api_key = Some(key);
         if settings.active_provider.is_none() {
-            settings.active_provider = Some("anthropic".to_string());
+            settings.active_provider = Some("VENUS".to_string());
         }
     }
 
@@ -179,10 +179,7 @@ async fn main() -> Result<()> {
         use venus_utils::config::ThinkingConfig;
         settings.thinking = Some(ThinkingConfig {
             mode: Some(thinking_mode.clone()),
-            budget_tokens: settings
-                .thinking
-                .as_ref()
-                .and_then(|t| t.budget_tokens),
+            budget_tokens: settings.thinking.as_ref().and_then(|t| t.budget_tokens),
         });
     }
 
@@ -196,10 +193,7 @@ async fn main() -> Result<()> {
             "max" => Some(32000),
             _ => None,
         };
-        let existing_mode = settings
-            .thinking
-            .as_ref()
-            .and_then(|t| t.mode.clone());
+        let existing_mode = settings.thinking.as_ref().and_then(|t| t.mode.clone());
         settings.thinking = Some(ThinkingConfig {
             mode: existing_mode.or_else(|| Some("enabled".to_string())),
             budget_tokens: budget,
@@ -314,7 +308,9 @@ async fn main() -> Result<()> {
     // Create permission handler based on mode
     let is_interactive = cli.prompt.is_none();
     let (perm_tx, perm_rx) = if is_interactive {
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<venus_permissions::tui_handler::PermissionRequest>();
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<
+            venus_permissions::tui_handler::PermissionRequest,
+        >();
         (Some(tx), Some(rx))
     } else {
         (None, None)
@@ -326,8 +322,16 @@ async fn main() -> Result<()> {
         Arc::new(InteractivePermissionHandler::new(settings.clone()))
     };
 
-    let mut engine =
-        QueryEngine::new(settings.clone(), tools, permissions, working_dir.clone(), task_store, background_runtime, hook_runner).await?;
+    let mut engine = QueryEngine::new(
+        settings.clone(),
+        tools,
+        permissions,
+        working_dir.clone(),
+        task_store,
+        background_runtime,
+        hook_runner,
+    )
+    .await?;
 
     // CLI flag overrides (applied after settings-based engine init)
     if let Some(ref name) = cli.name {
@@ -344,8 +348,12 @@ async fn main() -> Result<()> {
         engine.system_prompt.push_str(append);
     }
     if let Some(ref prompt_file) = cli.system_prompt_file {
-        let content = std::fs::read_to_string(prompt_file)
-            .with_context(|| format!("failed to read system prompt file: {}", prompt_file.display()))?;
+        let content = std::fs::read_to_string(prompt_file).with_context(|| {
+            format!(
+                "failed to read system prompt file: {}",
+                prompt_file.display()
+            )
+        })?;
         engine.system_prompt = content;
     }
 
@@ -367,28 +375,26 @@ async fn main() -> Result<()> {
                     msg_count,
                 );
             }
-            Err(e) => {
-                match try_resume_by_prefix(&resume_id).await {
-                    Ok(Some((meta, msg_values))) => {
-                        let messages: Vec<venus_core::message::Message> = msg_values
-                            .iter()
-                            .filter_map(|v| serde_json::from_value(v.clone()).ok())
-                            .collect();
-                        let msg_count = messages.len();
-                        *engine.messages.lock().await = messages;
-                        engine.session_id = meta.id.clone();
-                        engine.created_at = meta.created_at;
-                        eprintlf!(
-                            "Resumed session {} ({} messages)",
-                            &meta.id[..8.min(meta.id.len())],
-                            msg_count,
-                        );
-                    }
-                    _ => {
-                        eprintlf!("Warning: could not resume session '{}': {}", resume_id, e);
-                    }
+            Err(e) => match try_resume_by_prefix(&resume_id).await {
+                Ok(Some((meta, msg_values))) => {
+                    let messages: Vec<venus_core::message::Message> = msg_values
+                        .iter()
+                        .filter_map(|v| serde_json::from_value(v.clone()).ok())
+                        .collect();
+                    let msg_count = messages.len();
+                    *engine.messages.lock().await = messages;
+                    engine.session_id = meta.id.clone();
+                    engine.created_at = meta.created_at;
+                    eprintlf!(
+                        "Resumed session {} ({} messages)",
+                        &meta.id[..8.min(meta.id.len())],
+                        msg_count,
+                    );
                 }
-            }
+                _ => {
+                    eprintlf!("Warning: could not resume session '{}': {}", resume_id, e);
+                }
+            },
         }
     }
 
@@ -443,7 +449,12 @@ async fn main() -> Result<()> {
                 }
                 venus_core::stream::StreamEvent::Usage(usage) => {
                     let total = usage.input_tokens + usage.cache_read_tokens + usage.output_tokens;
-                    eprintln!("\n\ntokens: {} (in:{} out:{})", total, usage.input_tokens + usage.cache_read_tokens, usage.output_tokens);
+                    eprintln!(
+                        "\n\ntokens: {} (in:{} out:{})",
+                        total,
+                        usage.input_tokens + usage.cache_read_tokens,
+                        usage.output_tokens
+                    );
                 }
                 venus_core::stream::StreamEvent::MessageComplete(_) => {
                     eprintln!();
@@ -457,14 +468,32 @@ async fn main() -> Result<()> {
     // Interactive TUI mode
     tui::install_panic_hook();
 
-    let mut terminal = tui::init().map_err(|e| anyhow::anyhow!("Failed to init terminal: {}", e))?;
+    let mut terminal =
+        tui::init().map_err(|e| anyhow::anyhow!("Failed to init terminal: {}", e))?;
 
-    let result = run_tui(&mut terminal, engine, Some(skill_registry), Some(plugin_registry), perm_rx).await;
+    let result = run_tui(
+        &mut terminal,
+        engine,
+        Some(skill_registry),
+        Some(plugin_registry),
+        perm_rx,
+    )
+    .await;
 
-    // Restore terminal
+    // Restore terminal BEFORE printing so output goes to the live terminal
+    // (not into the alt-screen buffer which would be torn down on restore).
     let _ = tui::restore(&mut terminal);
 
-    result
+    match result {
+        Ok(app) => {
+            if let Err(e) = app.save_session_blocking().await {
+                tracing::warn!("failed to save session on exit: {}", e);
+            }
+            print_session_summary(&app);
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
 }
 
 async fn run_tui(
@@ -472,8 +501,10 @@ async fn run_tui(
     engine: QueryEngine,
     skill_registry: Option<Arc<venus_core::skill::SkillRegistry>>,
     plugin_registry: Option<venus_core::plugin_registry::PluginRegistry>,
-    perm_rx: Option<tokio::sync::mpsc::UnboundedReceiver<venus_permissions::tui_handler::PermissionRequest>>,
-) -> Result<()> {
+    perm_rx: Option<
+        tokio::sync::mpsc::UnboundedReceiver<venus_permissions::tui_handler::PermissionRequest>,
+    >,
+) -> Result<app::App> {
     // Create the event channel
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
 
@@ -492,7 +523,12 @@ async fn run_tui(
     }
 
     // Create the app with the event sender
-    let mut app = app::App::new(engine.clone(), skill_registry, plugin_registry, event_tx.clone());
+    let mut app = app::App::new(
+        engine.clone(),
+        skill_registry,
+        plugin_registry,
+        event_tx.clone(),
+    );
 
     // Set up cron scheduler
     let (cron_tx, mut cron_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
@@ -596,7 +632,110 @@ async fn run_tui(
         })
         .await;
 
-    Ok(())
+    Ok(app)
+}
+
+/// Render a multi-line session summary to stdout after the TUI exits so users
+/// can see the resource cost (tokens / cost) of the run that just ended, plus
+/// how to resume it.
+///
+/// Printed *after* the alt-screen buffer has been torn down by `tui::restore`
+/// so the lines persist in the user's scrollback.
+fn print_session_summary(app: &app::App) {
+    use std::io::Write;
+
+    let engine = &app.engine;
+    let session_id = engine.session_id.clone();
+    let short_id: String = session_id.chars().take(8).collect();
+    let model = engine.model.clone();
+
+    // Total elapsed wall clock since engine creation.
+    let now = chrono::Utc::now().timestamp() as u64;
+    let elapsed_secs = now.saturating_sub(engine.created_at);
+    let elapsed_str = format_duration(elapsed_secs);
+
+    // Aggregate token usage + cost (includes sub-agent usage because sub-agent
+    // engines share the parent's `cost_tracker`).
+    let (total_usage, total_cost_str, per_model) = {
+        let tracker = engine.cost_tracker.lock().unwrap();
+        let total = tracker.total_usage();
+        let cost = tracker.format_cost();
+        let mut entries = tracker.per_model_summary();
+        // Order by total tokens desc for a stable, readable view.
+        entries.sort_by_key(|(_, u, _)| std::cmp::Reverse(u.total_tokens()));
+        (total, cost, entries)
+    };
+
+    // Display messages -> real user submission turns count.
+    let user_turns = app
+        .messages
+        .iter()
+        .filter(|m| matches!(m, app::DisplayMessage::User { .. }))
+        .count();
+    let total_msgs = app.messages.len();
+
+    let total_tok = total_usage.total_tokens();
+    let tok_str = format_token_count_short(total_tok);
+    let in_str = format_token_count_short(total_usage.input_tokens + total_usage.cache_read_tokens);
+    let out_str = format_token_count_short(total_usage.output_tokens);
+    let cache_str = format_token_count_short(total_usage.cache_read_tokens + total_usage.cache_creation_tokens);
+
+    // Per-model breakdown lines (sorted by total tokens desc).
+    let mut per_model_lines: Vec<String> = Vec::new();
+    for (mname, usage, cost) in &per_model {
+        if usage.total_tokens() == 0 {
+            continue;
+        }
+        let line_in = format_token_count_short(usage.input_tokens + usage.cache_read_tokens);
+        let line_out = format_token_count_short(usage.output_tokens);
+        let line_cache = format_token_count_short(usage.cache_read_tokens + usage.cache_creation_tokens);
+        let cost_str = if *cost < 0.01 { format!("${:.4}", *cost) } else { format!("${:.2}", *cost) };
+        per_model_lines.push(format!("    {:<28} {:>6}in / {:>5}out / {:>6}cache   {}", mname, line_in, line_out, line_cache, cost_str));
+    }
+
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    let _ = writeln!(
+        out,
+        "\n─────────────── Session summary ───────────────\n  Session id:  {}\n  Model:       {}\n  Duration:    {}\n  Messages:    {} ({} user turns)\n  Tokens:      {}   in:{}  out:{}  cache:{}\n  Cost:        {}",
+        session_id, model, elapsed_str, total_msgs, user_turns, tok_str, in_str, out_str, cache_str, total_cost_str
+    );
+    if !per_model_lines.is_empty() {
+        let _ = writeln!(out, "  Per model:");
+        for line in &per_model_lines {
+            let _ = writeln!(out, "{}", line);
+        }
+    }
+    let _ = writeln!(
+        out,
+        "\nResume:  venus --resume {}  (or  venus --resume {})\n───────────────────────────────────────────────",
+        short_id, session_id
+    );
+}
+
+fn format_duration(secs: u64) -> String {
+    if secs >= 3600 {
+        let h = secs / 3600;
+        let m = (secs % 3600) / 60;
+        let s = secs % 60;
+        format!("{}h {}m {}s", h, m, s)
+    } else if secs >= 60 {
+        let m = secs / 60;
+        let s = secs % 60;
+        format!("{}m {}s", m, s)
+    } else {
+        format!("{}s", secs)
+    }
+}
+
+fn format_token_count_short(count: u64) -> String {
+    if count >= 1_000_000 {
+        format!("{:.2}M", count as f64 / 1_000_000.0)
+    } else if count >= 1_000 {
+        format!("{:.1}K", count as f64 / 1_000.0)
+    } else {
+        count.to_string()
+    }
 }
 
 async fn try_resume_by_prefix(
@@ -620,10 +759,14 @@ mod tests {
     fn test_cli_flag_parsing() {
         let cli = Cli::try_parse_from([
             "venus",
-            "--model", "claude-opus-4-20250514",
-            "--max-turns", "10",
-            "--max-budget-usd", "5.0",
-            "--thinking", "enabled",
+            "--model",
+            "claude-opus-4-20250514",
+            "--max-turns",
+            "10",
+            "--max-budget-usd",
+            "5.0",
+            "--thinking",
+            "enabled",
             "--verbose",
         ])
         .unwrap();
@@ -639,7 +782,7 @@ mod tests {
     fn test_cli_default_values() {
         let cli = Cli::try_parse_from(["venus"]).unwrap();
 
-        // model may be set via ANTHROPIC_MODEL env var, so don't assert is_none
+        // model may be set via VENUS_MODEL env var, so don't assert is_none
         assert!(cli.max_turns.is_none());
         assert!(cli.max_budget_usd.is_none());
         assert!(!cli.verbose);
@@ -653,7 +796,8 @@ mod tests {
         let cli = Cli::try_parse_from([
             "venus",
             "--dangerously-skip-permissions",
-            "--permission-mode", "bypass",
+            "--permission-mode",
+            "bypass",
         ])
         .unwrap();
 
@@ -665,19 +809,22 @@ mod tests {
     fn test_cli_tool_filtering() {
         let cli = Cli::try_parse_from([
             "venus",
-            "--allowed-tools", "Bash,Read,Write",
-            "--disallowed-tools", "Edit",
+            "--allowed-tools",
+            "Bash,Read,Write",
+            "--disallowed-tools",
+            "Edit",
         ])
         .unwrap();
 
         assert_eq!(
             cli.allowed_tools,
-            Some(vec!["Bash".to_string(), "Read".to_string(), "Write".to_string()])
+            Some(vec![
+                "Bash".to_string(),
+                "Read".to_string(),
+                "Write".to_string()
+            ])
         );
-        assert_eq!(
-            cli.disallowed_tools,
-            Some(vec!["Edit".to_string()])
-        );
+        assert_eq!(cli.disallowed_tools, Some(vec!["Edit".to_string()]));
     }
 
     #[test]
@@ -696,8 +843,10 @@ mod tests {
     fn test_cli_system_prompt_flags() {
         let cli = Cli::try_parse_from([
             "venus",
-            "--append-system-prompt", "Be extra helpful.",
-            "--system-prompt-file", "/tmp/prompt.txt",
+            "--append-system-prompt",
+            "Be extra helpful.",
+            "--system-prompt-file",
+            "/tmp/prompt.txt",
         ])
         .unwrap();
 
@@ -731,11 +880,7 @@ mod tests {
 
     #[test]
     fn test_cli_mcp_config() {
-        let cli = Cli::try_parse_from([
-            "venus",
-            "--mcp-config", "/path/to/mcp.json",
-        ])
-        .unwrap();
+        let cli = Cli::try_parse_from(["venus", "--mcp-config", "/path/to/mcp.json"]).unwrap();
 
         assert_eq!(
             cli.mcp_config.as_deref(),

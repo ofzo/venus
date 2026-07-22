@@ -123,6 +123,7 @@ mod tests {
             tools: Arc::new(ToolRegistry::new(vec![])),
             hook_runner: Arc::new(HookRunner::new(None, "test-session".to_string(), dir.to_path_buf())),
             cron_scheduler: None,
+            cost_tracker: None,
         }
     }
 
@@ -180,6 +181,7 @@ mod tests {
             tools: Arc::new(ToolRegistry::new(vec![])),
             hook_runner: Arc::new(HookRunner::new(None, "test-session".to_string(), tmp.path().to_path_buf())),
             cron_scheduler: None,
+            cost_tracker: None,
         };
 
         let tool = SendMessageTool;

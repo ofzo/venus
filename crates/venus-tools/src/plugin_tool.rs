@@ -261,6 +261,7 @@ mod tests {
             tools: Arc::new(venus_core::tool_registry::ToolRegistry::new(vec![])),
             hook_runner: Arc::new(venus_core::hooks::HookRunner::new(None, String::new(), PathBuf::from("/tmp"))),
             cron_scheduler: None,
+            cost_tracker: None,
         }
     }
 }

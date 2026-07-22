@@ -8,12 +8,12 @@ use tracing::{debug, info};
 use venus_utils::cost::TokenUsage;
 
 use crate::background::BackgroundTaskRuntime;
-use venus_utils::venusmd;
 use venus_utils::claudemd;
 use venus_utils::config::Settings;
 use venus_utils::context_window;
 use venus_utils::cost::CostTracker;
 use venus_utils::git;
+use venus_utils::venusmd;
 
 use crate::hooks::HookRunner;
 use crate::message::*;
@@ -77,7 +77,7 @@ impl QueryEngine {
     ) -> Result<Self> {
         let (auth_header, auth_value) = settings
             .resolve_auth()
-            .context("API credential required: set ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, or configure in settings")?;
+            .context("API credential required: set VENUS_API_KEY, VENUS_AUTH_TOKEN, or configure in settings")?;
 
         let model = settings.effective_model().to_string();
         let base_url = settings.effective_base_url().to_string();
@@ -142,7 +142,14 @@ impl QueryEngine {
         task_store: Arc<TaskStore>,
         background_runtime: Arc<BackgroundTaskRuntime>,
         hook_runner: Arc<HookRunner>,
+        parent_cost_tracker: Option<Arc<std::sync::Mutex<venus_utils::cost::CostTracker>>>,
     ) -> Self {
+        // A sub-agent contributes its token usage to the *parent* engine's
+        // cost tracker when one is supplied, so the true total (main + any
+        // sub-agents) becomes visible at exit-time / in the status bar. Fall
+        // back to an isolated tracker for unit tests that pass None.
+        let cost_tracker = parent_cost_tracker
+            .unwrap_or_else(|| Arc::new(std::sync::Mutex::new(venus_utils::cost::CostTracker::new())));
         Self {
             session_id: uuid::Uuid::new_v4().to_string(),
             session_name: None,
@@ -157,7 +164,7 @@ impl QueryEngine {
             tools,
             settings,
             permissions,
-            cost_tracker: Arc::new(std::sync::Mutex::new(CostTracker::new())),
+            cost_tracker,
             cancel_token: CancellationToken::new(),
             working_dir,
             additional_working_dirs: Vec::new(),
@@ -243,8 +250,7 @@ impl QueryEngine {
 
                 // Check if auto-compact should trigger
                 let current_input_tokens = usage.input_tokens + usage.cache_read_tokens;
-                let threshold =
-                    venus_utils::context_window::auto_compact_threshold(&self.model);
+                let threshold = venus_utils::context_window::auto_compact_threshold(&self.model);
 
                 if current_input_tokens >= threshold {
                     let config = crate::compact::CompactConfig::from_engine(
@@ -254,9 +260,7 @@ impl QueryEngine {
                         &self.base_url,
                     );
                     let mut messages = self.messages.lock().await;
-                    let mut failures = self
-                        .auto_compact_failures
-                        .load(Ordering::Relaxed);
+                    let mut failures = self.auto_compact_failures.load(Ordering::Relaxed);
                     if let Ok(Some(result)) =
                         crate::compact::auto_compact(&mut messages, &config, &mut failures).await
                     {
@@ -336,9 +340,7 @@ impl QueryEngine {
         let mut effective_input = input.clone();
         if let Ok(hook_resp) = self.hook_runner.run_pre_tool_use(name, input).await {
             if hook_resp.decision.as_deref() == Some("deny") {
-                let reason = hook_resp
-                    .reason
-                    .unwrap_or_else(|| "blocked by hook".into());
+                let reason = hook_resp.reason.unwrap_or_else(|| "blocked by hook".into());
                 let result = ToolResult::error(format!("Hook denied: {}", reason));
                 tx.send(StreamEvent::ToolResult {
                     id: id.to_string(),
@@ -354,7 +356,10 @@ impl QueryEngine {
         }
 
         // Check permission
-        let decision = self.permissions.check_permission(name, &effective_input).await;
+        let decision = self
+            .permissions
+            .check_permission(name, &effective_input)
+            .await;
         match decision {
             PermissionDecision::Allow => {}
             PermissionDecision::Deny(reason) => {
@@ -405,6 +410,7 @@ impl QueryEngine {
             tools: self.tools.clone(),
             hook_runner: self.hook_runner.clone(),
             cron_scheduler: self.cron_scheduler.clone(),
+            cost_tracker: Some(self.cost_tracker.clone()),
         };
 
         info!("executing tool: {} with input: {}", name, &effective_input);
@@ -475,9 +481,9 @@ impl QueryEngine {
                     // Build checkpoint from current state
                     let checkpoint_blocks: Vec<ContentBlock> =
                         blocks.iter().filter_map(|b| b.to_content_block()).collect();
-                    let has_content = checkpoint_blocks.iter().any(|b| {
-                        matches!(b, ContentBlock::Text { text } if !text.is_empty())
-                    });
+                    let has_content = checkpoint_blocks
+                        .iter()
+                        .any(|b| matches!(b, ContentBlock::Text { text } if !text.is_empty()));
 
                     return Err(StreamRecoveryError {
                         checkpoint: StreamCheckpoint {
@@ -633,10 +639,8 @@ impl QueryEngine {
         }
 
         // Build assistant message
-        let content: Vec<ContentBlock> = blocks
-            .iter()
-            .filter_map(|b| b.to_content_block())
-            .collect();
+        let content: Vec<ContentBlock> =
+            blocks.iter().filter_map(|b| b.to_content_block()).collect();
 
         let msg = AssistantMessage {
             uuid: uuid::Uuid::new_v4().to_string(),
@@ -844,7 +848,7 @@ impl QueryEngine {
             let result = client
                 .post(url)
                 .header(self.auth_header, &self.auth_value)
-                .header("anthropic-version", "2023-06-01")
+                .header("VENUS-version", "2023-06-01")
                 .header("content-type", "application/json")
                 .body(body.to_string())
                 .send()
@@ -854,7 +858,12 @@ impl QueryEngine {
                 Ok(r) => r,
                 Err(e) if attempt < MAX_RETRIES && e.is_timeout() => {
                     let delay = BASE_DELAY_MS * 2u64.pow(attempt);
-                    debug!("request timeout, retrying in {}ms (attempt {}/{})", delay, attempt + 1, MAX_RETRIES);
+                    debug!(
+                        "request timeout, retrying in {}ms (attempt {}/{})",
+                        delay,
+                        attempt + 1,
+                        MAX_RETRIES
+                    );
                     tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
                     continue;
                 }
@@ -871,8 +880,17 @@ impl QueryEngine {
 
             if !is_retryable || attempt >= MAX_RETRIES {
                 let body_text = response.text().await.unwrap_or_default();
-                let err_msg = format!("API error ({}): {}", status, &body_text[..body_text.len().min(500)]);
-                tx.send(StreamEvent::Error(err_msg.clone())).ok();
+                let err_msg = format!(
+                    "API error ({}): {}",
+                    status,
+                    &body_text[..body_text.len().min(500)]
+                );
+                // Do NOT push a `StreamEvent::Error` here: this error is
+                // terminal and propagates via the `Err` return up to the
+                // query-loop spawn boundary (`submit_message`), which is
+                // the single source of truth for surfacing terminal errors.
+                // Emitting here too produced a duplicated error line in the
+                // transcript (one inner, one outer).
                 return Err(anyhow::anyhow!(err_msg));
             }
 
@@ -889,7 +907,10 @@ impl QueryEngine {
 
             debug!(
                 "API returned {}, retrying in {}ms (attempt {}/{})",
-                status_code, delay, attempt + 1, MAX_RETRIES
+                status_code,
+                delay,
+                attempt + 1,
+                MAX_RETRIES
             );
             tx.send(StreamEvent::Error(format!(
                 "Rate limited ({}), retrying in {:.1}s...",
@@ -957,7 +978,10 @@ fn add_cache_control_to_messages(mut messages: Vec<serde_json::Value>) -> Vec<se
 async fn build_system_prompt(working_dir: &std::path::Path) -> String {
     let mut parts = Vec::new();
 
-    parts.push("You are Venus, an AI coding assistant. You help users with software engineering tasks.".to_string());
+    parts.push(
+        "You are Venus, an AI coding assistant. You help users with software engineering tasks."
+            .to_string(),
+    );
 
     // Add git context
     if let Ok(Some(git_ctx)) = git::get_git_context(working_dir).await {
@@ -985,8 +1009,7 @@ async fn build_system_prompt(working_dir: &std::path::Path) -> String {
     }
 
     // Load memory content
-    if let Ok(memory_content) =
-        venus_utils::memory::load_memory_for_prompt(Some(working_dir)).await
+    if let Ok(memory_content) = venus_utils::memory::load_memory_for_prompt(Some(working_dir)).await
     {
         if !memory_content.is_empty() {
             parts.push(format!("\n# Memory\n{}", memory_content));
@@ -1146,9 +1169,9 @@ mod tests {
         use venus_utils::config::ProviderConfig;
         let mut providers = HashMap::new();
         providers.insert(
-            "anthropic".to_string(),
+            "VENUS".to_string(),
             ProviderConfig {
-                provider_type: "anthropic".to_string(),
+                provider_type: "VENUS".to_string(),
                 api_key: Some("test-key".to_string()),
                 auth_token: None,
                 base_url: None,
@@ -1158,7 +1181,7 @@ mod tests {
             },
         );
         Arc::new(Settings {
-            active_provider: Some("anthropic".to_string()),
+            active_provider: Some("VENUS".to_string()),
             provider: Some(providers),
             ..Default::default()
         })
@@ -1180,7 +1203,13 @@ mod tests {
             "test-session".to_string(),
             PathBuf::from("/tmp"),
         ));
-        (tools, permissions, task_store, background_runtime, hook_runner)
+        (
+            tools,
+            permissions,
+            task_store,
+            background_runtime,
+            hook_runner,
+        )
     }
 
     #[tokio::test]

@@ -1,18 +1,16 @@
-use ratatui::{
-    prelude::*,
-    widgets::*,
-};
+use ratatui::{prelude::*, widgets::*};
 
 use crate::app::{App, PickerSource};
+use crate::ui::THEME_COLOR;
 
 /// Unicode figures matching Claude Code's figures.ts exactly
-const POINTER: &str = "\u{276F}";     // ❯
+const POINTER: &str = "\u{276F}"; // ❯
 #[allow(dead_code)]
-const TICK: &str = "\u{2714}";        // ✔
-const ARROW_UP: &str = "\u{2191}";    // ↑
-const ARROW_DOWN: &str = "\u{2193}";  // ↓
+const TICK: &str = "\u{2714}"; // ✔
+const ARROW_UP: &str = "\u{2191}"; // ↑
+const ARROW_DOWN: &str = "\u{2193}"; // ↓
 const DIVIDER_CHAR: char = '\u{2500}'; // ─
-const MIDDOT: &str = "\u{00B7}";      // ·
+const MIDDOT: &str = "\u{00B7}"; // ·
 
 /// Render picker matching Claude Code's Select/Pane/ModelPicker exactly.
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
@@ -39,8 +37,12 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let header_lines = if is_model_picker { 3 } else { 0 }; // title + desc + blank
     let footer_lines = if is_model_picker { 2 } else { 1 };
 
-    let total_height = pane_padding_top + divider_height + tab_line_height
-        + header_lines + visible_count + footer_lines;
+    let total_height = pane_padding_top
+        + divider_height
+        + tab_line_height
+        + header_lines
+        + visible_count
+        + footer_lines;
     let popup_height = total_height.min(area.height.saturating_sub(2));
     let popup_width = area.width;
 
@@ -61,18 +63,24 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             _ => Color::Yellow,
         };
         let mut spans = vec![
-            Span::styled(picker.title.clone(), Style::default().fg(title_color).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                picker.title.clone(),
+                Style::default()
+                    .fg(title_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw("  "),
         ];
         for (i, tab) in tab_state.tabs.iter().enumerate() {
-            if i > 0 { spans.push(Span::raw(" ")); } // gap=1
+            if i > 0 {
+                spans.push(Span::raw(" "));
+            } // gap=1
             if i == tab_state.selected_tab {
                 // Current tab: inverse + bold (matching Claude Code's Tabs component)
                 // Ink's `inverse={true}` = ratatui's Modifier::REVERSED
                 spans.push(Span::styled(
                     format!(" {} ", tab),
-                    Style::default()
-                        .add_modifier(Modifier::REVERSED | Modifier::BOLD),
+                    Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD),
                 ));
             } else {
                 // Non-current tab: no special styling
@@ -104,7 +112,9 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 "Select model",
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD), // "remember" ≈ yellow
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD), // "remember" ≈ yellow
             ))),
             title_area,
         );
@@ -127,11 +137,18 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 
     // 4. Select options (compact layout with two-column)
     // Check if we should use two-column layout (when descriptions exist)
-    let has_descriptions = picker.items.iter().any(|i| !i.description.is_empty() && !i.value.is_empty());
+    let has_descriptions = picker
+        .items
+        .iter()
+        .any(|i| !i.description.is_empty() && !i.value.is_empty());
     let is_config = matches!(picker.source, PickerSource::Config);
 
-    for (vis_idx, item_idx) in (picker.scroll_offset..picker.scroll_offset + picker.visible_count).enumerate() {
-        if item_idx >= picker.items.len() { break; }
+    for (vis_idx, item_idx) in
+        (picker.scroll_offset..picker.scroll_offset + picker.visible_count).enumerate()
+    {
+        if item_idx >= picker.items.len() {
+            break;
+        }
         let item = &picker.items[item_idx];
         let is_focused = item_idx == picker.selected;
         let is_separator = item.value.is_empty() && item.description.is_empty();
@@ -143,7 +160,9 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             frame.render_widget(
                 Paragraph::new(Line::from(Span::styled(
                     item.label.clone(),
-                    Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .add_modifier(Modifier::DIM),
                 ))),
                 item_area,
             );
@@ -161,7 +180,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 
             // Indicator (1 char)
             if is_focused {
-                spans.push(Span::styled(POINTER, Style::default().fg(Color::Cyan)));
+                spans.push(Span::styled(POINTER, Style::default().fg(THEME_COLOR)));
             } else {
                 spans.push(Span::raw(" "));
             }
@@ -170,7 +189,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 
             // Label
             let label_style = if is_focused {
-                Style::default().fg(Color::Cyan)
+                Style::default().fg(THEME_COLOR)
             } else {
                 Style::default()
             };
@@ -192,9 +211,12 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             // Two-column layout (matching TwoColumnRow exactly)
             // Indicator (1 char)
             if is_focused {
-                spans.push(Span::styled(POINTER, Style::default().fg(Color::Cyan)));
+                spans.push(Span::styled(POINTER, Style::default().fg(THEME_COLOR)));
             } else if vis_idx == 0 && picker.scroll_offset > 0 {
-                spans.push(Span::styled(ARROW_DOWN, Style::default().fg(Color::DarkGray)));
+                spans.push(Span::styled(
+                    ARROW_DOWN,
+                    Style::default().fg(Color::DarkGray),
+                ));
             } else if vis_idx == picker.visible_count - 1 && item_idx + 1 < picker.items.len() {
                 spans.push(Span::styled(ARROW_UP, Style::default().fg(Color::DarkGray)));
             } else {
@@ -209,7 +231,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             spans.push(Span::styled(padded, Style::default().fg(Color::DarkGray)));
 
             let label_style = if is_focused {
-                Style::default().fg(Color::Cyan)
+                Style::default().fg(THEME_COLOR)
             } else {
                 Style::default()
             };
@@ -233,9 +255,12 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             // Compact layout (no descriptions)
             // Indicator (1 char)
             if is_focused {
-                spans.push(Span::styled(POINTER, Style::default().fg(Color::Cyan)));
+                spans.push(Span::styled(POINTER, Style::default().fg(THEME_COLOR)));
             } else if vis_idx == 0 && picker.scroll_offset > 0 {
-                spans.push(Span::styled(ARROW_DOWN, Style::default().fg(Color::DarkGray)));
+                spans.push(Span::styled(
+                    ARROW_DOWN,
+                    Style::default().fg(Color::DarkGray),
+                ));
             } else if vis_idx == picker.visible_count - 1 && item_idx + 1 < picker.items.len() {
                 spans.push(Span::styled(ARROW_UP, Style::default().fg(Color::DarkGray)));
             } else {
@@ -250,7 +275,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             spans.push(Span::styled(padded, Style::default().fg(Color::DarkGray)));
 
             let label_style = if is_focused {
-                Style::default().fg(Color::Cyan)
+                Style::default().fg(THEME_COLOR)
             } else {
                 Style::default()
             };
@@ -281,9 +306,15 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         let effort_line = Line::from(vec![
             Span::styled(effort_symbol, Style::default().fg(Color::DarkGray)), // "claude" ≈ dim
             Span::raw(" "),
-            Span::styled(format!("{} effort", capitalized), Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{} effort", capitalized),
+                Style::default().fg(Color::DarkGray),
+            ),
             Span::raw("  "),
-            Span::styled("\u{2190} \u{2192} to adjust", Style::default().fg(Color::DarkGray)), // "subtle" ≈ dim
+            Span::styled(
+                "\u{2190} \u{2192} to adjust",
+                Style::default().fg(Color::DarkGray),
+            ), // "subtle" ≈ dim
         ]);
         frame.render_widget(Paragraph::new(effort_line), effort_area);
         current_y += 1;
@@ -295,7 +326,10 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::raw("For more help: "),
-                Span::styled("https://code.claude.com/docs/en/overview", Style::default().fg(Color::Cyan)),
+                Span::styled(
+                    "https://code.claude.com/docs/en/overview",
+                    Style::default().fg(THEME_COLOR),
+                ),
             ])),
             link_area,
         );
@@ -311,7 +345,10 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         }
         PickerSource::Config => {
             // Config footer (Byline format): "Space to change · Enter to save · / to search · Esc to cancel"
-            format!("Space to change {} Enter to save {} / to search {} Esc to cancel", MIDDOT, MIDDOT, MIDDOT)
+            format!(
+                "Space to change {} Enter to save {} / to search {} Esc to cancel",
+                MIDDOT, MIDDOT, MIDDOT
+            )
         }
         PickerSource::Model => {
             // ModelPicker footer: italic, dimColor
@@ -322,9 +359,9 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         }
     };
     let footer_style = match picker.source {
-        PickerSource::Help | PickerSource::Model => {
-            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)
-        }
+        PickerSource::Help | PickerSource::Model => Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::ITALIC),
         _ => Style::default().fg(Color::DarkGray),
     };
     frame.render_widget(

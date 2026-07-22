@@ -68,10 +68,7 @@ pub struct CompactResult {
 /// 2. Groups messages by API round
 /// 3. Sends older groups to the API for summarization
 /// 4. Replaces old messages with summary context + recent messages
-pub async fn compact(
-    messages: &mut Vec<Message>,
-    config: &CompactConfig,
-) -> Result<CompactResult> {
+pub async fn compact(messages: &mut Vec<Message>, config: &CompactConfig) -> Result<CompactResult> {
     compact_with_hooks(messages, config, None, "").await
 }
 
@@ -85,7 +82,10 @@ pub async fn compact_with_hooks(
     let messages_before = messages.len();
 
     if messages_before < 4 {
-        anyhow::bail!("conversation too short to compact ({} messages)", messages_before);
+        anyhow::bail!(
+            "conversation too short to compact ({} messages)",
+            messages_before
+        );
     }
 
     // Fire PreCompact hook
@@ -121,7 +121,10 @@ pub async fn compact_with_hooks(
     let recent_groups = &groups[split_point..];
 
     let old_end = old_groups.last().map(|g| g.end).unwrap_or(0);
-    let recent_start = recent_groups.first().map(|g| g.start).unwrap_or(messages.len());
+    let recent_start = recent_groups
+        .first()
+        .map(|g| g.start)
+        .unwrap_or(messages.len());
 
     // Estimate tokens being removed
     let old_tokens: u64 = old_groups.iter().map(|g| g.estimated_tokens).sum();
@@ -136,7 +139,11 @@ pub async fn compact_with_hooks(
 
     for attempt in 0..=MAX_PTL_RETRIES {
         let user_content = build_summary_user_message(
-            &messages_to_summarize.iter().copied().cloned().collect::<Vec<_>>(),
+            &messages_to_summarize
+                .iter()
+                .copied()
+                .cloned()
+                .collect::<Vec<_>>(),
         );
 
         match call_summarization_api(
@@ -330,8 +337,18 @@ pub async fn reactive_compact(
             Message::System(_) => "System",
         };
         let text: String = match msg {
-            Message::User(u) => u.content.iter().filter_map(|b| b.as_text()).collect::<Vec<_>>().join(" "),
-            Message::Assistant(a) => a.content.iter().filter_map(|b| b.as_text()).collect::<Vec<_>>().join(" "),
+            Message::User(u) => u
+                .content
+                .iter()
+                .filter_map(|b| b.as_text())
+                .collect::<Vec<_>>()
+                .join(" "),
+            Message::Assistant(a) => a
+                .content
+                .iter()
+                .filter_map(|b| b.as_text())
+                .collect::<Vec<_>>()
+                .join(" "),
             Message::System(s) => s.content.clone(),
         };
         if !text.is_empty() {
@@ -417,27 +434,24 @@ pub async fn compact_with_hooks_and_plan(
 
     // Re-inject plan mode context
     if plan_mode_active {
-        messages.push(Message::User(UserMessage::new(vec![
-            ContentBlock::text("[Plan mode is active. Continue working according to the plan.]"),
-        ])));
+        messages.push(Message::User(UserMessage::new(vec![ContentBlock::text(
+            "[Plan mode is active. Continue working according to the plan.]",
+        )])));
     }
 
     // Re-read files mentioned in summary
     let refreshed = post_compact_refresh(&result.summary_text, working_dir).await;
     for content in refreshed {
-        messages.push(Message::User(UserMessage::new(vec![
-            ContentBlock::text(&content),
-        ])));
+        messages.push(Message::User(UserMessage::new(vec![ContentBlock::text(
+            &content,
+        )])));
     }
 
     Ok(result)
 }
 
 /// Build a summary of a specific range of messages by calling the summarization API.
-async fn build_range_summary(
-    range_msgs: &[Message],
-    config: &CompactConfig,
-) -> Result<String> {
+async fn build_range_summary(range_msgs: &[Message], config: &CompactConfig) -> Result<String> {
     let system = summarization_system_prompt();
     let user_content = build_summary_user_message(range_msgs);
 
@@ -525,11 +539,19 @@ async fn call_summarization_api(
         let is_retryable = status_code == 429 || status_code == 529 || status_code >= 500;
 
         if !is_retryable || attempt >= MAX_RETRIES {
-            anyhow::bail!("summarization API error ({}): {}", status, &body[..body.len().min(500)]);
+            anyhow::bail!(
+                "summarization API error ({}): {}",
+                status,
+                &body[..body.len().min(500)]
+            );
         }
 
         let delay = BASE_DELAY_MS * 2u64.pow(attempt);
-        tracing::debug!("summarization API returned {}, retrying in {}ms", status_code, delay);
+        tracing::debug!(
+            "summarization API returned {}, retrying in {}ms",
+            status_code,
+            delay
+        );
         tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
     }
 
@@ -602,10 +624,7 @@ mod tests {
     fn test_compact_partial_invalid_range_up_to_exceeds() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let mut messages = vec![
-                make_text_message("hello"),
-                make_text_message("world"),
-            ];
+            let mut messages = vec![make_text_message("hello"), make_text_message("world")];
             let config = test_config();
             let result = compact_partial(&mut messages, &config, 0, 5).await;
             assert!(result.is_err());
@@ -617,10 +636,7 @@ mod tests {
     fn test_compact_partial_invalid_range_from_greater_than_up_to() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let mut messages = vec![
-                make_text_message("hello"),
-                make_text_message("world"),
-            ];
+            let mut messages = vec![make_text_message("hello"), make_text_message("world")];
             let config = test_config();
             let result = compact_partial(&mut messages, &config, 2, 1).await;
             assert!(result.is_err());

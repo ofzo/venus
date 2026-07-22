@@ -147,7 +147,9 @@ impl BackgroundTaskRuntime {
         let home = std::env::var("HOME")
             .or_else(|_| std::env::var("USERPROFILE"))
             .unwrap_or_else(|_| ".".to_string());
-        PathBuf::from(home).join(".venus").join("background_tasks.json")
+        PathBuf::from(home)
+            .join(".venus")
+            .join("background_tasks.json")
     }
 
     /// Save current task list to disk.
@@ -168,7 +170,9 @@ impl BackgroundTaskRuntime {
     }
 
     /// Save tasks from the internal HashMap to disk (used in spawned task).
-    async fn save_tasks_to_disk_static(tasks: &RwLock<HashMap<String, BackgroundTaskEntry>>) -> Result<()> {
+    async fn save_tasks_to_disk_static(
+        tasks: &RwLock<HashMap<String, BackgroundTaskEntry>>,
+    ) -> Result<()> {
         let tasks = tasks.read().await;
         let infos: Vec<BackgroundTaskInfo> = tasks.values().map(|e| e.info.clone()).collect();
         Self::save_tasks_to_disk(&infos).await
@@ -281,7 +285,9 @@ mod tests {
 
         let tasks = runtime.list().await;
         assert_eq!(tasks.len(), 2);
-        assert!(tasks.iter().all(|t| t.status == BackgroundTaskStatus::Completed));
+        assert!(tasks
+            .iter()
+            .all(|t| t.status == BackgroundTaskStatus::Completed));
     }
 
     #[tokio::test]

@@ -1,6 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use venus_core::tool::{Tool, ToolContext, ToolResult};
+use venus_utils::diff::{compute_file_diff, ToolDiff};
 use venus_utils::fs_helpers;
 use serde_json::Value;
 
@@ -107,11 +108,17 @@ impl Tool for FileEditTool {
             "1 occurrence".to_string()
         };
 
+        // Attach a structured diff (old -> new_content) so the conversation
+        // view renders a colourised `+/-` preview, matching the Write tool.
+        let diff_lines = compute_file_diff(&content, &new_content);
+        let diff = ToolDiff::new(path.display().to_string(), diff_lines);
+
         Ok(ToolResult::text(format!(
             "Edited {} (replaced {})",
             path.display(),
             replaced
-        )))
+        ))
+        .with_diff(diff))
     }
 
     fn format_for_display(&self, input: &Value) -> String {

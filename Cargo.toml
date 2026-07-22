@@ -48,6 +48,7 @@ crossterm = "0.28"
 
 # File system
 globset = "0.4"
+similar = "2"
 walkdir = "2"
 ignore = "0.4"
 notify = "7"

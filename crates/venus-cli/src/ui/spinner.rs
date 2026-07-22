@@ -1,9 +1,7 @@
-use ratatui::{
-    prelude::*,
-    widgets::*,
-};
+use ratatui::{prelude::*, widgets::*};
 
 use crate::app::App;
+use crate::ui::THEME_COLOR;
 
 /// Render the spinner matching Claude Code's SpinnerAnimationRow exactly.
 ///
@@ -42,16 +40,16 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     drop(cost_tracker);
 
     if total_tokens > 0 {
-        status_parts.push(format!("\u{2193} {} tokens", format_token_count(total_tokens))); // ↓
+        status_parts.push(format!(
+            "\u{2193} {} tokens",
+            format_token_count(total_tokens)
+        )); // ↓
     }
 
     // Build the full line
     let mut spans = vec![
         // Glyph (2 chars wide)
-        Span::styled(
-            format!(" {}", glyph),
-            Style::default().fg(Color::Cyan),
-        ),
+        Span::styled(format!(" {}", glyph), Style::default().fg(THEME_COLOR)),
         // Message verb + ellipsis
         Span::styled(
             format!("{}\u{2026}", verb),

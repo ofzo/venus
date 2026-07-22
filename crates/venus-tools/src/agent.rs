@@ -89,6 +89,7 @@ impl Tool for AgentTool {
                 task_store: ctx.task_store.clone(),
                 background_runtime: ctx.background_runtime.clone(),
                 hook_runner: ctx.hook_runner.clone(),
+                cost_tracker: ctx.cost_tracker.clone(),
             };
             let task_id = runtime
                 .spawn(description.to_string(), async move {
@@ -118,6 +119,7 @@ impl Tool for AgentTool {
             task_store: ctx.task_store.clone(),
             background_runtime: ctx.background_runtime.clone(),
             hook_runner: ctx.hook_runner.clone(),
+            cost_tracker: ctx.cost_tracker.clone(),
         };
 
         let result = SubAgent::run(config).await?;

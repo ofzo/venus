@@ -90,13 +90,10 @@ pub fn microcompact(messages: &mut [Message], keep_recent: usize) -> usize {
 pub fn should_microcompact_by_time(messages: &[Message], threshold_secs: u64) -> bool {
     let now = chrono::Utc::now().timestamp() as u64;
 
-    let last_assistant_ts = messages
-        .iter()
-        .rev()
-        .find_map(|msg| match msg {
-            Message::Assistant(a) => Some(a.timestamp),
-            _ => None,
-        });
+    let last_assistant_ts = messages.iter().rev().find_map(|msg| match msg {
+        Message::Assistant(a) => Some(a.timestamp),
+        _ => None,
+    });
 
     match last_assistant_ts {
         Some(ts) if now > ts => (now - ts) >= threshold_secs,

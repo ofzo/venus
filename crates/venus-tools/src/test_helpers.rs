@@ -41,5 +41,6 @@ pub fn make_test_context() -> ToolContext {
             PathBuf::from("/tmp"),
         )),
         cron_scheduler: None,
+        cost_tracker: None,
     }
 }

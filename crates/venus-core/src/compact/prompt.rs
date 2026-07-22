@@ -5,7 +5,6 @@ const MAX_TOOL_RESULT_CHARS: usize = 2000;
 
 /// Build the system prompt for the summarization API call.
 pub fn summarization_system_prompt() -> String {
-
     r#"You are a conversation summarizer. Your job is to create a detailed summary of the conversation so far that preserves all important context needed for continuing the work.
 
 CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.
@@ -132,10 +131,9 @@ pub fn build_summary_user_message(messages: &[Message]) -> String {
 /// if no tags are found.
 pub fn parse_summary(response: &str) -> String {
     // Remove <analysis>...</analysis>
-    let without_analysis = if let (Some(start), Some(end)) = (
-        response.find("<analysis>"),
-        response.find("</analysis>"),
-    ) {
+    let without_analysis = if let (Some(start), Some(end)) =
+        (response.find("<analysis>"), response.find("</analysis>"))
+    {
         let end = end + "</analysis>".len();
         let mut result = String::new();
         result.push_str(&response[..start]);

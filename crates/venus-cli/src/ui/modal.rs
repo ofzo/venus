@@ -1,10 +1,8 @@
-use ratatui::{
-    prelude::*,
-    widgets::*,
-};
+use crate::ui::THEME_COLOR;
+use ratatui::{prelude::*, widgets::*};
 
-const POINTER: &str = "\u{276F}";  // ❯
-const MIDDOT: &str = "\u{00B7}";   // ·
+const POINTER: &str = "\u{276F}"; // ❯
+const MIDDOT: &str = "\u{00B7}"; // ·
 
 /// Render permission prompt matching Claude Code's PermissionPrompt exactly.
 ///
@@ -47,7 +45,12 @@ pub fn render(
     let tool_area = Rect::new(content_x, current_y, inner_width, 1);
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled(tool_name, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                tool_name,
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw("  "),
             Span::styled(description, Style::default().fg(Color::DarkGray)),
         ])),
@@ -71,7 +74,7 @@ pub fn render(
 
         // Indicator
         if is_focused {
-            spans.push(Span::styled(POINTER, Style::default().fg(Color::Cyan)));
+            spans.push(Span::styled(POINTER, Style::default().fg(THEME_COLOR)));
         } else {
             spans.push(Span::raw(" "));
         }
@@ -81,14 +84,20 @@ pub fn render(
 
         // Label (suggestion color when focused)
         if is_focused {
-            spans.push(Span::styled(label.to_string(), Style::default().fg(Color::Cyan)));
+            spans.push(Span::styled(
+                label.to_string(),
+                Style::default().fg(THEME_COLOR),
+            ));
         } else {
             spans.push(Span::raw(label.to_string()));
         }
 
         // Inline description (dimColor, after space)
         spans.push(Span::raw("  "));
-        spans.push(Span::styled(desc.to_string(), Style::default().fg(Color::DarkGray)));
+        spans.push(Span::styled(
+            desc.to_string(),
+            Style::default().fg(Color::DarkGray),
+        ));
 
         frame.render_widget(Paragraph::new(Line::from(spans)), opt_area);
         current_y += 1;
